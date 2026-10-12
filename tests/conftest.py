@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from pdcst.models import Podcast, Feed, Episode
+from pdcst.models import Episode, Feed, Podcast
 
 
 @pytest.fixture
@@ -20,7 +20,9 @@ def episode(podcast):
     attributes = {
         "podcast": podcast,
         "index": 1,
-        "audio_url": "https://d2mmy4gxasde9x.cloudfront.net/cast_audio/pp38_refactoring.mp3",
+        "audio_url": (
+            "https://d2mmy4gxasde9x.cloudfront.net/cast_audio/" "pp38_refactoring.mp3"
+        ),
         "guid": "dfd60a58-8bd3-4fe2-8dab-87f55093a0c7",
         "published": datetime.utcnow(),
         "title": "Refactoring",

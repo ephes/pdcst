@@ -3,6 +3,11 @@ All the domain models for pdcst live here.
 """
 
 
+import re
+from pathlib import PureWindowsPath
+from urllib.parse import urlsplit
+
+
 class Feed:
     """
     To be able to fetch a feed with feedparser, we need it's url.
@@ -51,7 +56,9 @@ class Podcast:
         self.file_name_pattern = file_name_pattern
         self.episodes_count = episodes_count
         self.directory = (
-            self.title.lower().replace(" ", "_") if directory is None else directory
+            self.title_for_filename(self.title) or "podcast"
+            if directory is None
+            else directory
         )
 
     @classmethod
@@ -62,7 +69,11 @@ class Podcast:
     @staticmethod
     def title_for_filename(title: str) -> str:
         """Remove characters that could cause problems in file names."""
-        return title.lower().replace(" ", "_").replace("?", "").replace(",", "")
+        return re.sub(
+            r"[^\w.-]",
+            "_",
+            title.lower().replace(" ", "_").replace("?", "").replace(",", ""),
+        ).strip(".")
 
     def dict(self):
         """Serialize a podcast to dict."""
@@ -90,11 +101,22 @@ class Podcast:
         """
         details = {
             # FIXME proper suffix from path? Or take info about format from feed?
-            "file_format": episode.audio_url.split(".")[-1],
+            "file_format": self.title_for_filename(
+                urlsplit(episode.audio_url).path.rsplit(".", 1)[-1]
+            ),
             "index": episode.index,
-            "title": self.title_for_filename(episode.title)
+            "title": self.title_for_filename(episode.title),
         }
-        return self.file_name_pattern.format(**details)
+        name = self.file_name_pattern.format(**details)
+        if (
+            not name
+            or name in {".", ".."}
+            or "/" in name
+            or "\\" in name
+            or PureWindowsPath(name).drive
+        ):
+            raise ValueError("Episode name must be a single relative file name")
+        return name
 
 
 class Episode:
