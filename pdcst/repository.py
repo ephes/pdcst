@@ -4,9 +4,14 @@ Repositories to store podcasts/episodes.
 Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
+import fcntl
+import os
+import tempfile
 import warnings
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from operator import itemgetter
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import feedparser
@@ -92,7 +97,7 @@ class JsonRepository:
     _all = None
 
     def __init__(self, base_dir):
-        self.base_dir = base_dir
+        self.base_dir = Path(str(base_dir))
 
     @property
     def path(self):
@@ -135,32 +140,46 @@ class JsonRepository:
                 for model in self.all.values()
             ]
 
+    @contextmanager
+    def _lock(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(self.path.suffix + ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def _write_models(self, locked):
-        try:
-            self.path.parent.mkdir(exist_ok=True)
-        except AttributeError:
-            # LocalPath in tests
-            pass
         models = self.storage_model_list_type(__root__=list(locked.values()))
-        with self.path.open("w") as f:
-            f.write(models.json())
+        serialized = models.json()
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.path.parent, delete=False
+            ) as output:
+                temporary = Path(output.name)
+                output.write(serialized)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def add(self, model):
         """Add a single model to the repository."""
-        model_in_db = self.storage_model_type(**model.dict())
-        # To avoid race conditions implement proper locking of json file FIXME
-        locked = self._fetch_all()
-        locked[model_in_db.pk] = model_in_db
-        self._write_models(locked)
+        self.add_list([model])
 
     def add_list(self, models):
-        """Add a list of models to the repository."""
+        """Reload and atomically commit models under a stable advisory lock."""
         models_in_db = [self.storage_model_type(**model.dict()) for model in models]
-        # To avoid race conditions implement proper locking of json file FIXME
-        locked = self._fetch_all()
-        for model_in_db in models_in_db:
-            locked[model_in_db.pk] = model_in_db
-        self._write_models(locked)
+        with self._lock():
+            locked = self._fetch_all()
+            for model_in_db in models_in_db:
+                locked[model_in_db.pk] = model_in_db
+            self._write_models(locked)
+            self._all = None
 
 
 class EpisodeRepository(JsonRepository):
