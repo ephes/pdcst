@@ -49,6 +49,21 @@ def subscribe(
     """
     # add fetched podcast metadata to repository
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
+    if podcast_dir is None:
+        existing = next(
+            (item for item in podcasts_repo.list() if item.feed.url == feed_url), None
+        )
+        if existing is not None:
+            podcast.directory = existing.directory
+        else:
+            legacy = podcast.title.lower().replace(" ", "_")
+            try:
+                legacy_path = contained_path(settings.root, legacy)
+            except ValueError:
+                pass
+            else:
+                if legacy_path.is_dir():
+                    podcast.directory = legacy
     episode_dir = contained_path(settings.root, podcast.directory)
     for episode in episodes:
         contained_path(

@@ -75,7 +75,8 @@ $ pytest
 ## Storage and failure guarantees
 
 `PDCST_HOME` selects the storage root. Feed-derived directory and episode titles
-are converted to single safe components. `--podcast-dir` may specify a relative
+are converted to single safe components for new subscriptions. Existing stored
+directory names and contained legacy directories remain stable. `--podcast-dir` may specify a relative
 subdirectory within that root; absolute paths, parent traversal, Windows paths,
 and symlinks resolving outside the root are rejected before writing. Filename
 patterns must produce a single relative filename. Existing subscriptions with
@@ -84,7 +85,8 @@ processes do not change directory symlinks while a command is running.
 
 Downloads require an HTTP success response and follow at most five redirects.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
-must match the received bytes. Files are flushed into a sibling temporary file
+must match the received bytes. Replacements preserve existing file permissions; new files use 0666 filtered by
+the process umask. Files are flushed into a sibling temporary file
 and atomically replaced after completion; failures retain the previous file and
 do not mark an episode downloaded. Filesystem errors propagate to the caller.
 

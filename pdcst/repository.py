@@ -5,8 +5,6 @@ Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
 import fcntl
-import os
-import tempfile
 from contextlib import contextmanager
 from datetime import datetime
 from operator import itemgetter
@@ -17,6 +15,7 @@ import feedparser
 from pydantic import BaseModel, parse_file_as
 
 from .models import Episode, Podcast
+from .storage import replacement_file
 
 
 class FeedInDb(BaseModel):
@@ -132,19 +131,8 @@ class JsonRepository:
     def _write_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
         serialized = models.json()
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=self.path.parent, delete=False
-            ) as output:
-                temporary = Path(output.name)
-                output.write(serialized)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, self.path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        with replacement_file(self.path) as output:
+            output.write(serialized)
 
     def add(self, model):
         """Add a single model to the repository."""
@@ -176,6 +164,21 @@ class PodcastRepository(JsonRepository):
     """
     Store podcasts metadata.
     """
+
+    def list(self, additional_attributes=None):
+        from . import contained_path
+
+        podcasts = super().list(additional_attributes)
+        for podcast, stored in zip(podcasts, self.all.values()):
+            if stored.directory is None:
+                legacy = stored.title.lower().replace(" ", "_")
+                try:
+                    path = contained_path(self.base_dir, legacy)
+                except ValueError:
+                    continue
+                if path.is_dir():
+                    podcast.directory = legacy
+        return podcasts
 
     name = "podcasts.json"
     storage_model_type = PodcastInDb
