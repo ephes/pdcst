@@ -1,4 +1,6 @@
 import copy
+import os
+import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -137,7 +139,7 @@ def test_repository_failure_preserves_bytes(tmp_path, podcast, monkeypatch, fail
         monkeypatch.setattr(repo.storage_model_list_type, "json", fail)
     else:
         monkeypatch.setattr(
-            "pdcst.repository.os." + ("fsync" if failure == "flush" else "replace"),
+            "pdcst.storage.os." + ("fsync" if failure == "flush" else "replace"),
             fail,
         )
     with pytest.raises(OSError, match="injected"):
@@ -176,3 +178,78 @@ def test_concurrent_adds(tmp_path, podcast, monkeypatch):
         a.result(timeout=10)
         b.result(timeout=10)
     assert len(PodcastRepository(tmp_path).list()) == 2
+
+
+@pytest.mark.parametrize("stored", [None, "custom!", "show?!"])
+def test_existing_subscription_directory(tmp_path, monkeypatch, podcast, stored):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Show?!"
+    legacy = stored or "show?!"
+    (tmp_path / legacy).mkdir()
+    repo = PodcastRepository(tmp_path)
+    podcast.directory = stored
+    repo.add(podcast)
+    assert repo.list()[0].directory == legacy
+    fresh = Podcast(feed=podcast.feed, title=podcast.title, episodes_count=0)
+
+    class Parser:
+        def get(self, *_):
+            return fresh, []
+
+    result = pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
+    assert result.directory == legacy
+    assert (tmp_path / legacy / "episodes.json").exists()
+    assert not (tmp_path / "show_").exists()
+
+
+@pytest.mark.parametrize("escaping", [False, True])
+def test_legacy_directory_lookup_contained(tmp_path, monkeypatch, podcast, escaping):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(pdcst.settings, "root", root)
+    podcast.title = "Show!"
+    podcast.directory = Podcast.title_for_filename(podcast.title)
+    if escaping:
+        (root / "show!").symlink_to(tmp_path, target_is_directory=True)
+    else:
+        (root / "show!").mkdir()
+
+    class Parser:
+        def get(self, *_):
+            return podcast, []
+
+    result = pdcst.subscribe("url", "{title}", None, Parser(), PodcastRepository(root))
+    assert result.directory == ("show_" if escaping else "show!")
+    assert not (tmp_path / "episodes.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["media", "json"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_atomic_file_permissions(tmp_path, monkeypatch, podcast, kind, existing):
+    repo = PodcastRepository(tmp_path)
+    target = repo.path if kind == "json" else tmp_path / "audio.mp3"
+    if existing:
+        if kind == "json":
+            repo.add(podcast)
+        else:
+            target.write_bytes(b"old")
+        target.chmod(0o664)
+    client = httpx.Client
+    monkeypatch.setattr(
+        "httpx.Client",
+        lambda **kw: client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, stream=httpx.ByteStream(b"new"))
+            ),
+            **kw
+        ),
+    )
+    previous = os.umask(0o027)
+    try:
+        if kind == "json":
+            repo.add(podcast)
+        else:
+            download_with_progress("https://example.test/audio", target)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(target.stat().st_mode) == (0o664 if existing else 0o640)
