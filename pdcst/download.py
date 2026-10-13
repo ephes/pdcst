@@ -15,6 +15,9 @@ def download_with_progress(url, target_path):
             "GET", url, headers={"Accept-Encoding": "identity"}
         ) as response:
             response.raise_for_status()
+            encoding = response.headers.get("Content-Encoding", "identity")
+            if encoding.strip().lower() not in {"", "identity"}:
+                raise ValueError("Unsupported media content encoding")
             length = response.headers.get("Content-Length", "")
             total = int(length) if length.isascii() and length.isdigit() else None
             target_path.parent.mkdir(parents=True, exist_ok=True)

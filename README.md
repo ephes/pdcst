@@ -114,7 +114,8 @@ processes do not change directory symlinks while a command is running.
 
 Downloads require an HTTP success response and follow at most five redirects.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
-must match the received bytes. Replacements preserve existing file permissions; new files use 0666 filtered by
+must match the received bytes. Responses with a content encoding other than
+identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
 the process umask. Files are flushed into a sibling temporary file
 and atomically replaced after completion; failures retain the previous file and
 do not mark an episode downloaded. Filesystem errors propagate to the caller.

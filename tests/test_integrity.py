@@ -64,10 +64,21 @@ class BrokenStream(httpx.SyncByteStream):
 
 @pytest.mark.parametrize(
     "case",
-    ["404", "broken", "short", "loop", "missing", "invalid", "redirect", "success"],
+    [
+        "404",
+        "broken",
+        "short",
+        "loop",
+        "encoded",
+        "missing",
+        "invalid",
+        "redirect",
+        "success",
+        "long-name",
+    ],
 )
 def test_download_atomic(tmp_path, monkeypatch, case):
-    target = tmp_path / "audio.mp3"
+    target = tmp_path / ("a" * 251 + ".mp3" if case == "long-name" else "audio.mp3")
     target.write_bytes(b"old")
     requests = []
 
@@ -82,6 +93,8 @@ def test_download_atomic(tmp_path, monkeypatch, case):
         headers = {}
         if case == "short":
             headers["Content-Length"] = "100"
+        elif case == "encoded":
+            headers["Content-Encoding"] = "gzip"
         elif case == "invalid":
             headers["Content-Length"] = "oops"
         elif case == "success":
@@ -93,7 +106,7 @@ def test_download_atomic(tmp_path, monkeypatch, case):
         "httpx.Client",
         lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
     )
-    if case in {"404", "broken", "short", "loop"}:
+    if case in {"404", "broken", "short", "loop", "encoded"}:
         with pytest.raises((httpx.HTTPError, ValueError)):
             download_with_progress("https://example.test/audio", target)
         assert target.read_bytes() == b"old"
@@ -241,7 +254,7 @@ def test_atomic_file_permissions(tmp_path, monkeypatch, podcast, kind, existing)
             transport=httpx.MockTransport(
                 lambda _: httpx.Response(200, stream=httpx.ByteStream(b"new"))
             ),
-            **kw
+            **kw,
         ),
     )
     previous = os.umask(0o027)

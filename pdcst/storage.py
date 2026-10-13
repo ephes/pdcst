@@ -8,7 +8,8 @@ from contextlib import contextmanager
 
 @contextmanager
 def replacement_file(target, *, binary=False):
-    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    # Short name: independent of the length of the destination name.
+    temporary = target.with_name(f".{uuid.uuid4().hex}.tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(
