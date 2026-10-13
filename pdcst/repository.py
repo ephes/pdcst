@@ -4,15 +4,19 @@ Repositories to store podcasts/episodes.
 Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
+import fcntl
 import warnings
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from operator import itemgetter
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import feedparser
 from pydantic import BaseModel, parse_file_as, validator
 
 from .models import Episode, Podcast
+from .storage import replacement_file
 
 
 def as_utc(value):
@@ -92,7 +96,7 @@ class JsonRepository:
     _all = None
 
     def __init__(self, base_dir):
-        self.base_dir = base_dir
+        self.base_dir = Path(str(base_dir))
 
     @property
     def path(self):
@@ -135,32 +139,35 @@ class JsonRepository:
                 for model in self.all.values()
             ]
 
+    @contextmanager
+    def _lock(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(self.path.suffix + ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def _write_models(self, locked):
-        try:
-            self.path.parent.mkdir(exist_ok=True)
-        except AttributeError:
-            # LocalPath in tests
-            pass
         models = self.storage_model_list_type(__root__=list(locked.values()))
-        with self.path.open("w") as f:
-            f.write(models.json())
+        serialized = models.json()
+        with replacement_file(self.path) as output:
+            output.write(serialized)
 
     def add(self, model):
         """Add a single model to the repository."""
-        model_in_db = self.storage_model_type(**model.dict())
-        # To avoid race conditions implement proper locking of json file FIXME
-        locked = self._fetch_all()
-        locked[model_in_db.pk] = model_in_db
-        self._write_models(locked)
+        self.add_list([model])
 
     def add_list(self, models):
-        """Add a list of models to the repository."""
+        """Reload and atomically commit models under a stable advisory lock."""
         models_in_db = [self.storage_model_type(**model.dict()) for model in models]
-        # To avoid race conditions implement proper locking of json file FIXME
-        locked = self._fetch_all()
-        for model_in_db in models_in_db:
-            locked[model_in_db.pk] = model_in_db
-        self._write_models(locked)
+        with self._lock():
+            locked = self._fetch_all()
+            for model_in_db in models_in_db:
+                locked[model_in_db.pk] = model_in_db
+            self._write_models(locked)
+            self._all = None
 
 
 class EpisodeRepository(JsonRepository):
@@ -178,6 +185,21 @@ class PodcastRepository(JsonRepository):
     """
     Store podcasts metadata.
     """
+
+    def list(self, additional_attributes=None):
+        from . import contained_path
+
+        podcasts = super().list(additional_attributes)
+        for podcast, stored in zip(podcasts, self.all.values()):
+            if stored.directory is None:
+                legacy = stored.title.lower().replace(" ", "_")
+                try:
+                    path = contained_path(self.base_dir, legacy)
+                except ValueError:
+                    continue
+                if path.is_dir():
+                    podcast.directory = legacy
+        return podcasts
 
     name = "podcasts.json"
     storage_model_type = PodcastInDb

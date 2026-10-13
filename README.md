@@ -100,3 +100,30 @@ to it before running pytest. The package requires Pydantic 1 for its current
 storage and settings APIs. Formatting/lint checks are configured in
 `.pre-commit-config.yaml` (Black, isort, pyupgrade, Flake8 and file hygiene).
 No type-checking or CI workflow is configured.
+
+## Storage and failure guarantees
+
+`PDCST_HOME` selects the storage root. Feed-derived directory and episode titles
+are converted to single safe components for new subscriptions. Existing stored
+directory names and contained legacy directories remain stable. `--podcast-dir` may specify a relative
+subdirectory within that root; absolute paths, parent traversal, Windows paths,
+and symlinks resolving outside the root are rejected before writing. Filename
+patterns must produce a single relative filename. Existing subscriptions with
+unsafe paths must be corrected before use. Containment assumes other local
+processes do not change directory symlinks while a command is running.
+
+Downloads require an HTTP success response and follow at most five redirects.
+Missing or invalid Content-Length uses indeterminate progress. A valid length
+must match the received bytes. Responses with a content encoding other than
+identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
+the process umask. Files are flushed into a sibling temporary file
+and atomically replaced after completion; failures retain the previous file and
+do not mark an episode downloaded. Filesystem errors propagate to the caller.
+
+JSON repositories use stable `.json.lock` files and POSIX advisory locks to
+serialize cooperating writers across reload and atomic replacement. Do not
+remove lock files while commands are running. Failed serialization or writes
+leave the previous JSON intact; leftover temporary files after a killed process
+can be removed when no commands are running. Existing corrupt JSON must be
+restored from backup; it is not silently overwritten. Mutations invalidate the
+same instance's cached list; use a new instance to observe other writers.

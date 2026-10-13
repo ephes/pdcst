@@ -1,29 +1,38 @@
-"""
-Just some helper functions for downloading audio urls etc.
-"""
+"""Download audio without publishing incomplete or unsuccessful responses."""
+
+from pathlib import Path
 
 import httpx
 import rich.progress
 
+from .storage import replacement_file
+
 
 def download_with_progress(url, target_path):
-    """
-    Stolen from: https://www.python-httpx.org/advanced/
-    """
-    with target_path.open("wb") as download_file:
-        with httpx.stream("GET", url) as response:
-            total = int(response.headers["Content-Length"])
-
-            with rich.progress.Progress(
-                "[progress.percentage]{task.percentage:>3.0f}%",
-                rich.progress.BarColumn(bar_width=None),
-                rich.progress.DownloadColumn(),
-                rich.progress.TransferSpeedColumn(),
-            ) as progress:
-                download_task = progress.add_task("Download", total=total)
-                for chunk in response.iter_bytes():
-                    download_file.write(chunk)
-                    progress.update(
-                        download_task, completed=response.num_bytes_downloaded
-                    )
+    target_path = Path(target_path)
+    with httpx.Client(follow_redirects=True, max_redirects=5) as client:
+        with client.stream(
+            "GET", url, headers={"Accept-Encoding": "identity"}
+        ) as response:
+            response.raise_for_status()
+            encoding = response.headers.get("Content-Encoding", "identity")
+            if encoding.strip().lower() not in {"", "identity"}:
+                raise ValueError("Unsupported media content encoding")
+            length = response.headers.get("Content-Length", "")
+            total = int(length) if length.isascii() and length.isdigit() else None
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with replacement_file(target_path, binary=True) as output:
+                completed = 0
+                with rich.progress.Progress(
+                    rich.progress.BarColumn(bar_width=None),
+                    rich.progress.DownloadColumn(),
+                    rich.progress.TransferSpeedColumn(),
+                ) as progress:
+                    task = progress.add_task("Download", total=total)
+                    for chunk in response.iter_raw():
+                        output.write(chunk)
+                        completed += len(chunk)
+                        progress.update(task, completed=completed)
+                if total is not None and completed != total:
+                    raise ValueError("Incomplete media response")
     return target_path
