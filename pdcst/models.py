@@ -92,7 +92,7 @@ class Podcast:
             # FIXME proper suffix from path? Or take info about format from feed?
             "file_format": episode.audio_url.split(".")[-1],
             "index": episode.index,
-            "title": self.title_for_filename(episode.title)
+            "title": self.title_for_filename(episode.title),
         }
         return self.file_name_pattern.format(**details)
 
