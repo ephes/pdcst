@@ -40,6 +40,29 @@ To add a feed subscription call:
 $ pdcst add https://python-podcast.de/show/feed/podcast/mp3/rss.xml --name-pattern "gpp_{index:03}_{title}.{file_format}"
 ```
 
+Feeds must have a channel title and at least one usable audio episode (an ID,
+title, publication date, and audio enclosure). The stored feed update date uses
+the first valid value from channel update date (`lastBuildDate`/Atom `updated`),
+channel publication date (`pubDate`), HTTP `Last-Modified`, then the newest usable
+episode publication date. Previously only HTTP `Last-Modified` was used; it is
+now preserved as a fallback rather than required. Empty or unusable feeds raise
+`pdcst.repository.FeedError` (a `ValueError`) with a short diagnostic message.
+
+Import chooses the first valid HTTP(S) enclosure whose declared media type is
+supported: audio/mpeg, audio/mp3, audio/mp4, audio/aac, audio/x-m4a, audio/ogg,
+audio/opus, audio/wav, audio/x-wav, audio/flac, or audio/x-flac. If none matches,
+an enclosure without a media type may be used when its URL path ends in .mp3,
+.m4a, .aac, .ogg, .oga, .opus, .wav, or .flac (case insensitive; query strings
+are ignored). Explicit types outside the supported list are rejected, even with
+an audio extension. Enclosure URLs containing whitespace are rejected.
+Unusable entries are skipped with a warning reporting their count; valid sibling
+episodes remain available and receive contiguous chronological indices.
+
+Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
+Existing stored timestamps without a timezone are read as UTC, the legacy
+convention; explicitly offset timestamps are converted to UTC. Existing naive
+values cannot recover any historical host DST conversion error.
+
 ## Download
 
 Download an episode which has "rest" in the title from the python podcast:
@@ -71,3 +94,9 @@ Flit should have already installed pytest:
 ```shell
 $ pytest
 ```
+
+For an isolated test run, create a writable data directory and set `PDCST_HOME`
+to it before running pytest. The package requires Pydantic 1 for its current
+storage and settings APIs. Formatting/lint checks are configured in
+`.pre-commit-config.yaml` (Black, isort, pyupgrade, Flake8 and file hygiene).
+No type-checking or CI workflow is configured.

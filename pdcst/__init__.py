@@ -75,7 +75,8 @@ def find_episode_by_identifier(podcast: Podcast, identifier: str) -> Episode | N
 def add(
     feed_url: str,
     name_pattern: str = typer.Option(
-        "{index:03}_{title}.{file_format}", help="Pattern to use for downloaded file names"
+        "{index:03}_{title}.{file_format}",
+        help="Pattern to use for downloaded file names",
     ),
     podcast_dir: str = typer.Option(
         None, help="base directory for storing podcast episodes"

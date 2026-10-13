@@ -4,19 +4,38 @@ Repositories to store podcasts/episodes.
 Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
-from datetime import datetime
+import warnings
+from datetime import datetime, timezone
 from operator import itemgetter
-from time import mktime
+from urllib.parse import urlsplit
 
 import feedparser
-from pydantic import BaseModel, parse_file_as
+from pydantic import BaseModel, parse_file_as, validator
 
 from .models import Episode, Podcast
+
+
+def as_utc(value):
+    """Legacy naive storage values represent UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def parsed_date(value):
+    """Feedparser supplies UTC date tuples."""
+    return datetime(*value[:6], tzinfo=timezone.utc)
+
+
+class FeedError(ValueError):
+    """A feed cannot supply usable podcast metadata."""
 
 
 class FeedInDb(BaseModel):
     url: str
     updated: datetime
+
+    _utc_updated = validator("updated", allow_reuse=True)(as_utc)
 
 
 class EpisodeInDb(BaseModel):
@@ -26,6 +45,8 @@ class EpisodeInDb(BaseModel):
     published: datetime
     title: str
     audio_file: str | None
+
+    _utc_published = validator("published", allow_reuse=True)(as_utc)
 
     @property
     def pk(self):
@@ -169,48 +190,110 @@ class FeedParserRepository:
     Fetch/parse feed data from http.
     """
 
-    @staticmethod
-    def parse_feed_entries(entries):
-        """
-        Turn the entries attribute of a parsed podcast feed into dicts
-        which could then be validated by pydantic and turned into domain
-        models.
-        """
+    AUDIO_TYPES = {
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/mp4",
+        "audio/aac",
+        "audio/x-m4a",
+        "audio/ogg",
+        "audio/opus",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/flac",
+        "audio/x-flac",
+    }
+    AUDIO_SUFFIXES = {"mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"}
+
+    @classmethod
+    def audio_url(cls, entry):
+        fallback = None
+        for enclosure in entry.get("enclosures", []):
+            href = enclosure.get("href")
+            if not isinstance(href, str) or any(c.isspace() for c in href):
+                continue
+            try:
+                url = urlsplit(href)
+                if url.scheme not in {"http", "https"} or not url.hostname:
+                    continue
+                # Access validates an explicitly supplied port.
+                url.port
+            except ValueError:
+                continue
+            media_type = enclosure.get("type", "").split(";", 1)[0].strip().lower()
+            if media_type in cls.AUDIO_TYPES:
+                return href
+            if (
+                not media_type
+                and url.path.lower().rsplit(".", 1)[-1] in cls.AUDIO_SUFFIXES
+            ):
+                fallback = fallback or href
+        if fallback:
+            return fallback
+        raise ValueError("No supported audio enclosure")
+
+    @classmethod
+    def parse_feed_entries(cls, entries):
+        """Keep usable episodes and report a bounded count of skipped entries."""
         episodes = []
+        skipped = 0
         for entry in entries:
-            episodes.append(
-                {
-                    "guid": entry.id,
-                    "audio_url": entry.enclosures[0]["href"],
-                    "published": datetime.fromtimestamp(mktime(entry.published_parsed)),
-                    "title": entry.title,
+            try:
+                episode = {
+                    "guid": entry["id"],
+                    "audio_url": cls.audio_url(entry),
+                    "published": parsed_date(entry["published_parsed"]),
+                    "title": entry["title"],
                 }
+                if not all(
+                    isinstance(episode[key], str) and episode[key].strip()
+                    for key in ("guid", "title")
+                ):
+                    raise ValueError("Missing episode identity or title")
+            except (KeyError, AttributeError, TypeError, ValueError, IndexError):
+                skipped += 1
+                continue
+            episodes.append(episode)
+        if not episodes:
+            raise FeedError("Feed has no usable audio episodes")
+        if skipped:
+            warnings.warn(
+                f"Skipped {skipped} unusable feed entry/entries", stacklevel=2
             )
         episodes.sort(key=itemgetter("published"))
-        # add index
         for index, episode in enumerate(episodes, 1):
             episode["index"] = index
         return episodes
 
     def get(self, url, directory, episode_name_pattern):
-        """
-        Fetch feed from http and parse/validate/build a podcast domain model.
-        """
+        """Fetch a feed; channel update defaults to the newest usable episode."""
         document = feedparser.parse(url)
+        title = document.get("feed", {}).get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise FeedError("Feed is missing a title")
 
-        # validate and build feed
-        feed_in_db = FeedInDb(
-            url=url, updated=datetime.fromtimestamp(mktime(document["updated_parsed"]))
-        )
-
-        # validate episodes
-        episodes_from_feed = self.parse_feed_entries(document.entries)
+        episodes_from_feed = self.parse_feed_entries(document.get("entries", []))
         validated_episodes = [EpisodeInDb(**episode) for episode in episodes_from_feed]
+        updated = validated_episodes[-1].published
+        channel = document["feed"]
+        # Read raw keys rather than feedparser's deprecated updated/pubDate alias.
+        for date in (
+            dict.get(channel, "updated_parsed"),
+            dict.get(channel, "published_parsed"),
+            dict.get(document, "updated_parsed"),  # HTTP Last-Modified
+        ):
+            if date:
+                try:
+                    updated = parsed_date(date)
+                except (TypeError, ValueError, IndexError):
+                    continue
+                break
+        feed_in_db = FeedInDb(url=url, updated=updated)
 
         # validate and build podcast
         podcast_in_db = PodcastInDb(
             feed=feed_in_db,
-            title=document["feed"]["title"],
+            title=title,
             file_name_pattern=episode_name_pattern,
             episodes_count=len(validated_episodes),
             directory=directory,
