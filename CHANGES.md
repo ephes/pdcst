@@ -1,6 +1,8 @@
 # Unreleased
 
 * Preserve valid local download associations when refreshing subscriptions.
+* Assign separate directories to distinct feeds with colliding titles and reject
+  explicit cross-feed directory reuse.
 
 * Accept feeds without HTTP Last-Modified timestamps. Prefer channel update/publication
   dates, then HTTP Last-Modified, then the newest usable episode date.

@@ -49,31 +49,61 @@ def subscribe(
     """
     # add fetched podcast metadata to repository
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
-    if podcast_dir is None:
-        existing = next(
-            (item for item in podcasts_repo.list() if item.feed.url == feed_url), None
-        )
-        if existing is not None:
-            podcast.directory = existing.directory
-        else:
-            legacy = podcast.title.lower().replace(" ", "_")
-            try:
-                legacy_path = contained_path(settings.root, legacy)
-            except ValueError:
-                pass
+    with podcasts_repo._lock():
+        podcasts_repo._all = None
+        subscriptions = podcasts_repo.list()
+        if podcast_dir is None:
+            existing = next(
+                (item for item in subscriptions if item.feed.url == feed_url), None
+            )
+            if existing is not None:
+                podcast.directory = existing.directory
             else:
-                if legacy_path.is_dir():
-                    podcast.directory = legacy
-    episode_dir = contained_path(settings.root, podcast.directory)
-    for episode in episodes:
-        contained_path(
-            settings.root, podcast.directory, podcast.get_audio_file_name(episode)
-        )
-    podcasts_repo.add(podcast)
+                legacy = podcast.title.lower().replace(" ", "_")
+                try:
+                    legacy_path = contained_path(settings.root, legacy)
+                except ValueError:
+                    pass
+                else:
+                    if legacy_path.is_dir():
+                        podcast.directory = legacy
 
-    # add fetched episodes metadata to repository
-    episodes_repo = EpisodeRepository(episode_dir)
-    episodes_repo.import_list(episodes)
+        def owned(directory):
+            candidate = str(contained_path(settings.root, directory)).casefold()
+            for item in subscriptions:
+                if item.feed.url == feed_url:
+                    continue
+                try:
+                    stored_path = contained_path(settings.root, item.directory)
+                except ValueError:
+                    # Unsafe legacy paths cannot own a contained destination.
+                    continue
+                if str(stored_path).casefold() == candidate:
+                    return True
+            return False
+
+        if owned(podcast.directory):
+            if podcast_dir is not None or existing is not None:
+                raise ValueError(
+                    "Podcast directory is already used by another feed; "
+                    "choose a distinct --podcast-dir"
+                )
+            base = podcast.directory
+            suffix = 2
+            while owned(podcast.directory):
+                podcast.directory = f"{base}_{suffix}"
+                suffix += 1
+        episode_dir = contained_path(settings.root, podcast.directory)
+        for episode in episodes:
+            contained_path(
+                settings.root, podcast.directory, podcast.get_audio_file_name(episode)
+            )
+        locked = podcasts_repo._fetch_all()
+        stored = podcasts_repo.storage_model_type(**podcast.dict())
+        locked[stored.pk] = stored
+        podcasts_repo._write_models(locked)
+        podcasts_repo._all = None
+        EpisodeRepository(episode_dir).import_list(episodes)
     return podcast
 
 
@@ -128,7 +158,10 @@ def add(
 
     You can specify a file name pattern for downloaded audio files with --name-pattern
     """
-    podcast = subscribe(feed_url, name_pattern, podcast_dir)
+    try:
+        podcast = subscribe(feed_url, name_pattern, podcast_dir)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     print(f"Podcast {podcast.title} added")
 
 

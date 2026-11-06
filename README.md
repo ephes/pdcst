@@ -65,7 +65,14 @@ values cannot recover any historical host DST conversion error.
 
 Repeated subscriptions refresh feed metadata and keep existing download associations
 only when the stored filename still refers to a contained local file. New episodes
-start undownloaded.
+start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
+titles receive numbered directory suffixes. An explicit `--podcast-dir` already
+owned by another feed is rejected before either JSON repository changes.
+Existing cross-feed directory sharing is also rejected on refresh. Re-add one
+feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio
+files stay in their old directory; download associations are not migrated to the
+new directory automatically. An unsafe legacy path does not block unrelated
+subscriptions, but must be corrected before using that subscription.
 
 ## Download
 
