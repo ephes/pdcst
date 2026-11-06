@@ -4,6 +4,8 @@
 * Assign separate directories to distinct feeds with colliding titles and reject
   explicit cross-feed directory reuse.
 * Report unmatched download selections as CLI errors; match titles case insensitively.
+* Fetch feed bytes with status, size, elapsed-time and redirect bounds while
+  preserving relative enclosures and HTTP date metadata.
 
 * Accept feeds without HTTP Last-Modified timestamps. Prefer channel update/publication
   dates, then HTTP Last-Modified, then the newest usable episode date.
