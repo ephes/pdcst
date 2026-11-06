@@ -5,14 +5,17 @@ Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
 import fcntl
+import time
 import warnings
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from operator import itemgetter
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import feedparser
+import httpx
 from pydantic import BaseModel, parse_file_as, validator
 
 from .models import Episode, Podcast
@@ -238,6 +241,87 @@ class FeedParserRepository:
     Fetch/parse feed data from http.
     """
 
+    MAX_BYTES = 8 * 1024 * 1024
+    MAX_SECONDS = 30
+    MAX_REDIRECTS = 5
+
+    @classmethod
+    def fetch_document(cls, url):
+        """Acquire bounded, uncompressed feed bytes before parsing."""
+        deadline = time.monotonic() + cls.MAX_SECONDS
+
+        def remaining():
+            budget = deadline - time.monotonic()
+            if budget <= 0:
+                raise FeedError("Feed fetch exceeded time limit")
+            return min(10, budget)
+
+        try:
+            with httpx.Client(follow_redirects=False) as client:
+                for redirects in range(cls.MAX_REDIRECTS + 1):
+                    with client.stream(
+                        "GET",
+                        url,
+                        timeout=remaining(),
+                        headers={"Accept-Encoding": "identity"},
+                    ) as response:
+                        remaining()
+                        if response.has_redirect_location:
+                            if redirects == cls.MAX_REDIRECTS:
+                                raise FeedError("Feed has too many redirects")
+                            url = urljoin(
+                                str(response.url), response.headers["location"]
+                            )
+                            continue
+                        response.raise_for_status()
+                        encoding = response.headers.get("content-encoding", "identity")
+                        if encoding.strip().lower() not in {"", "identity"}:
+                            raise FeedError("Unsupported feed content encoding")
+                        length = response.headers.get("content-length", "")
+                        if (
+                            length.isascii()
+                            and length.isdigit()
+                            and int(length) > cls.MAX_BYTES
+                        ):
+                            raise FeedError("Feed exceeds byte limit")
+                        body = bytearray()
+                        for chunk in response.iter_raw():
+                            remaining()
+                            if len(body) + len(chunk) > cls.MAX_BYTES:
+                                raise FeedError("Feed exceeds byte limit")
+                            body.extend(chunk)
+                        remaining()
+                        headers = dict(response.headers)
+                        headers["content-location"] = urljoin(
+                            str(response.url), headers.get("content-location", "")
+                        )
+                        document = feedparser.parse(
+                            bytes(body), response_headers=headers
+                        )
+                        for entry in document.entries:
+                            for enclosure in entry.get("links", []):
+                                if enclosure.get("rel") != "enclosure":
+                                    continue
+                                href = enclosure.get("href")
+                                if isinstance(href, str) and not any(
+                                    c.isspace() for c in href
+                                ):
+                                    enclosure["href"] = urljoin(
+                                        headers["content-location"], href
+                                    )
+                        modified = headers.get("last-modified")
+                        if modified:
+                            try:
+                                date = as_utc(parsedate_to_datetime(modified))
+                                document["updated_parsed"] = date.utctimetuple()
+                            except (TypeError, ValueError, OverflowError):
+                                pass
+                        return document
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as error:
+            if isinstance(error, FeedError):
+                raise
+            raise FeedError("Unable to fetch feed") from error
+
     AUDIO_TYPES = {
         "audio/mpeg",
         "audio/mp3",
@@ -315,7 +399,7 @@ class FeedParserRepository:
 
     def get(self, url, directory, episode_name_pattern):
         """Fetch a feed; channel update defaults to the newest usable episode."""
-        document = feedparser.parse(url)
+        document = self.fetch_document(url)
         title = document.get("feed", {}).get("title")
         if not isinstance(title, str) or not title.strip():
             raise FeedError("Feed is missing a title")

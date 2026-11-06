@@ -74,6 +74,15 @@ files stay in their old directory; download associations are not migrated to the
 new directory automatically. An unsafe legacy path does not block unrelated
 subscriptions, but must be corrected before using that subscription.
 
+Feed requests accept only successful HTTP responses, follow at most five redirects,
+and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejected.
+Acquisition checks a 30-second elapsed deadline across redirects and chunks, with
+HTTP operation timeouts of at most 10 seconds (a blocked operation may run until
+its timeout before the elapsed deadline is checked again). Fetch failures raise
+`FeedError` and leave subscription and episode JSON unchanged. Relative enclosure
+URLs resolve against the final response URL or its Content-Location header;
+HTTP Last-Modified remains a date fallback.
+
 ## Download
 
 Download an episode which has "rest" in the title from the python podcast:

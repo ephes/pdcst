@@ -26,7 +26,9 @@ def fetch(monkeypatch, entries, channel_date=""):
         f'<rss version="2.0"><channel><title>Podcast</title>{channel_date}'
         f"{entries}</channel></rss>"
     )
-    monkeypatch.setattr("pdcst.repository.feedparser.parse", lambda url: document)
+    monkeypatch.setattr(
+        FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
+    )
     return FeedParserRepository().get("https://example.com/feed", None, "{index}.mp3")
 
 
@@ -52,7 +54,9 @@ def test_unusable_feed_has_clear_error(monkeypatch, entries):
 
 def test_missing_feed_title(monkeypatch):
     document = feedparser.parse("<rss><channel/></rss>")
-    monkeypatch.setattr("pdcst.repository.feedparser.parse", lambda url: document)
+    monkeypatch.setattr(
+        FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
+    )
     with pytest.raises(ValueError, match="Feed is missing a title"):
         FeedParserRepository().get("https://example.com/feed", None, "{index}.mp3")
 
@@ -189,7 +193,9 @@ def test_subscribe_without_channel_date(monkeypatch, tmp_path):
     document = feedparser.parse(
         f"<rss><channel><title>Podcast</title>{item()}</channel></rss>"
     )
-    monkeypatch.setattr("pdcst.repository.feedparser.parse", lambda url: document)
+    monkeypatch.setattr(
+        FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
+    )
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     podcast = pdcst.subscribe(
         "https://example.com/feed",
@@ -233,7 +239,9 @@ def test_http_last_modified_fallback(monkeypatch, channel_date, expected_day):
     document["updated_parsed"] = time.strptime(
         "2022-07-03 12:00:00", "%Y-%m-%d %H:%M:%S"
     )
-    monkeypatch.setattr("pdcst.repository.feedparser.parse", lambda url: document)
+    monkeypatch.setattr(
+        FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
+    )
     podcast, _ = FeedParserRepository().get(
         "https://example.com/feed", None, "{index}.mp3"
     )
