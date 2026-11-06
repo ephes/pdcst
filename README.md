@@ -125,7 +125,28 @@ For an isolated test run, create a writable data directory and set `PDCST_HOME`
 to it before running pytest. The package requires Pydantic 1 for its current
 storage and settings APIs. Formatting/lint checks are configured in
 `.pre-commit-config.yaml` (Black, isort, pyupgrade, Flake8 and file hygiene).
-No type-checking or CI workflow is configured.
+No type-checking is configured. GitHub Actions runs the synthetic suite on Linux
+with Python 3.10 and 3.13 and a temporary data root, after installing a wheel with
+the `test` extra. The main suite imports the source checkout; a separate smoke
+check imports the installed package in isolated Python mode and runs
+`pdcst --help` from outside the checkout. No subscriptions, accounts,
+or external services are needed.
+
+The equivalent local commands, in a fresh virtualenv for each interpreter, are:
+
+```shell
+export PDCST_HOME="$(mktemp -d)"
+export PDCST_TEST_WHEEL=1
+python -m pip install build
+python -m build --wheel
+python -m pip install "$(echo dist/*.whl)[test]"
+python -m pytest
+```
+
+Use a clean `dist/` directory so it contains only the wheel just built. Run the
+configured formatting/lint hooks as applicable before submitting changes.
+`PDCST_TEST_WHEEL=1` enables the wheel smoke check; leave it unset for ordinary
+editable installs, which skip that check.
 
 ## Storage and failure guarantees
 
