@@ -162,3 +162,11 @@ leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. Existing corrupt JSON must be
 restored from backup; it is not silently overwritten. Mutations invalidate the
 same instance's cached list; use a new instance to observe other writers.
+
+Subscription refresh holds the podcast lock while importing episodes under their
+own lock, then publishes the subscription record last. Corrupt episode JSON or
+an episode read/write failure leaves subscription bytes, directory pointers and
+counts unchanged. If subscription publication fails, imported episode metadata
+may already be updated; retrying preserves valid download associations. This is
+an ordered two-file update, not a crash-atomic transaction. New directories and
+stable lock files may remain after a failed import.
