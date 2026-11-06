@@ -101,9 +101,10 @@ def subscribe(
         locked = podcasts_repo._fetch_all()
         stored = podcasts_repo.storage_model_type(**podcast.dict())
         locked[stored.pk] = stored
+        # Import under the episode lock before publishing its subscription pointer.
+        EpisodeRepository(episode_dir).import_list(episodes)
         podcasts_repo._write_models(locked)
         podcasts_repo._all = None
-        EpisodeRepository(episode_dir).import_list(episodes)
     return podcast
 
 
