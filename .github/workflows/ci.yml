@@ -15,7 +15,6 @@ jobs:
         python: ['3.10', '3.13']
     env:
       PDCST_TEST_WHEEL: "1"
-      PDCST_HOME: ${{ runner.temp }}/pdcst-home
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,6 +22,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Build and install wheel with test extra
         run: |
+          export PDCST_HOME="$RUNNER_TEMP/pdcst-home"
+          echo "PDCST_HOME=$PDCST_HOME" >> "$GITHUB_ENV"
           mkdir -p "$PDCST_HOME"
           python -m pip install build
           python -m build --wheel
