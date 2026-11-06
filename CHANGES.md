@@ -1,5 +1,7 @@
 # Unreleased
 
+* Preserve valid local download associations when refreshing subscriptions.
+
 * Accept feeds without HTTP Last-Modified timestamps. Prefer channel update/publication
   dates, then HTTP Last-Modified, then the newest usable episode date.
 * Store feed and episode dates in UTC; interpret legacy naive stored dates as UTC.
