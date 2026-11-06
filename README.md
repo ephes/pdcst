@@ -5,6 +5,8 @@ It's in pre alpha status (just started a week ago).
 
 # Installation
 
+Python 3.10 or newer is required. The current storage/settings APIs use Pydantic 1.
+
 ```shell
 $ pipx install pdcst
 ```
