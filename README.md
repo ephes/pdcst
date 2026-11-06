@@ -66,8 +66,8 @@ convention; explicitly offset timestamps are converted to UTC. Existing naive
 values cannot recover any historical host DST conversion error.
 
 Repeated subscriptions refresh feed metadata and keep existing download associations
-only when the stored filename still refers to a contained local file. New episodes
-start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
+only when the enclosure URL is unchanged and the stored filename still refers
+to a contained local file. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
 titles receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
@@ -189,10 +189,35 @@ the process umask. Files are flushed into a sibling temporary file
 and atomically replaced after completion; failures retain the previous file and
 do not mark an episode downloaded. Filesystem errors propagate to the caller.
 
+Before transferring audio, downloads claim the destination for the selected episode
+GUID under a per-podcast `episodes.json.download.lock`. Concurrent downloads for
+that podcast wait for this claim; feed refreshes can proceed during transfer.
+Publication rechecks ownership under the JSON repository lock. A destination owned
+by another GUID or an unowned existing file is refused without replacing its bytes
+or changing download associations. Filename comparisons conservatively ignore case
+and normalize Unicode on all hosts. Repository filenames and symlink destinations are refused. A same-GUID
+refresh of its associated file is allowed. Use a distinct filename pattern (for
+example, one including `{index}`) to resolve episode name collisions.
+
+Downloads commit only the local filename against the current GUID and captured
+enclosure URL, preserving newer titles, dates and indices. If the episode disappears
+or its enclosure changes during transfer, the command reports a conflict and the
+completed audio's `.pdcst-download-*` recovery path. It leaves the destination intact
+and does not associate those bytes with the new enclosure. A feed refresh drops an
+association when its enclosure URL changes, retaining the old audio on disk. Move
+that unowned audio aside before retrying with the same filename. Enclosure identity
+uses the complete URL, including query parameters; feeds that rotate signed or
+tracking URLs therefore invalidate associations even if their audio is unchanged. Recovery files can
+be inspected/moved manually; they are never automatically adopted. Failed transfers
+remove their own staging file. Audio replacement and JSON publication are ordered,
+not a crash-atomic transaction: a JSON write failure may leave complete audio at the
+destination without an association; preserve/move it before retrying. Publication
+errors that leave a completed staging file also report its recovery path.
+
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
 serialize cooperating writers across reload and atomic replacement. Do not
-remove lock files while commands are running. Failed serialization or writes
-leave the previous JSON intact; leftover temporary files after a killed process
+remove either kind of lock file while commands are running. Failed serialization
+or writes leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. Existing corrupt JSON must be
 restored from backup; it is not silently overwritten. Mutations invalidate the
 same instance's cached list; use a new instance to observe other writers.

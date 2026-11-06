@@ -27,6 +27,7 @@ def test_audio_budget_preserves_audio_and_metadata(
     monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _: podcast)
     monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_: episode)
     repo = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_file = podcast.get_audio_file_name(episode)
     repo.add(episode)
     before = repo.path.read_bytes()
     target = repo.base_dir / podcast.get_audio_file_name(episode)
@@ -69,7 +70,7 @@ def test_audio_budget_preserves_audio_and_metadata(
         pdcst.download("synthetic", "synthetic")
     assert target.read_bytes() == b"old"
     assert repo.path.read_bytes() == before
-    assert episode.audio_file is None
+    assert episode.audio_file == target.name
     assert not list(tmp_path.rglob("*.tmp"))
     assert stream.closed
     if case in {"declared", "headers"}:

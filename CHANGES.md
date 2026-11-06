@@ -1,5 +1,11 @@
 # Unreleased
 
+* Claim download destinations by episode GUID, refusing cross-episode collisions,
+  unowned files, symlinks and repository filenames before transfer/publication.
+* Commit only download associations against the current enclosure URL, preserving
+  refreshed feed metadata and retaining completed conflicting audio for recovery.
+  Drop old download associations when a feed changes the enclosure URL.
+
 * Cover the registered subscription and episode browsing commands with isolated,
   offline CLI tests for output, show selection, podcast association and unchanged
   stored metadata; document their silent empty/no-match behavior.

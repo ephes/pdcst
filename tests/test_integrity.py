@@ -10,7 +10,7 @@ import pytest
 import pdcst
 from pdcst.download import download_with_progress
 from pdcst.models import Podcast
-from pdcst.repository import PodcastRepository
+from pdcst.repository import EpisodeRepository, PodcastRepository
 
 
 @pytest.mark.parametrize(
@@ -125,11 +125,16 @@ def test_download_failure_leaves_metadata(tmp_path, monkeypatch, podcast, episod
     def fail(*_):
         raise httpx.ReadError("disconnect")
 
+    repo = EpisodeRepository(tmp_path / podcast.directory)
+    repo.add(episode)
+    before = repo.path.read_bytes()
     monkeypatch.setattr(pdcst, "download_with_progress", fail)
     with pytest.raises(httpx.ReadError):
         pdcst.download("python", "rest")
     assert episode.audio_file is None
-    assert not list(tmp_path.iterdir())
+    assert repo.path.read_bytes() == before
+    assert not list(repo.base_dir.glob(".pdcst-download-*"))
+    assert not list(repo.base_dir.glob("*.mp3"))
 
 
 def test_repository_cached_list(tmp_path, podcast):

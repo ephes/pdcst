@@ -10,7 +10,12 @@ import typer
 from .config import settings
 from .download import download_with_progress
 from .models import Episode, Podcast
-from .repository import EpisodeRepository, FeedParserRepository, PodcastRepository
+from .repository import (
+    DownloadConflict,
+    EpisodeRepository,
+    FeedParserRepository,
+    PodcastRepository,
+)
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes"]
 
@@ -204,12 +209,14 @@ def download(podcast: str, episode: str):
     episode = find_episode_by_identifier(podcast, episode)
     if episode is None:
         raise typer.BadParameter("No matching episode")
-    target_path = contained_path(
-        settings.root, podcast.directory, podcast.get_audio_file_name(episode)
-    )
-    download_with_progress(episode.audio_url, target_path)
-    episode.audio_file = target_path.name
-    EpisodeRepository(contained_path(settings.root, podcast.directory)).add(episode)
+    try:
+        EpisodeRepository(
+            contained_path(settings.root, podcast.directory)
+        ).download_episode(
+            episode, podcast.get_audio_file_name(episode), download_with_progress
+        )
+    except DownloadConflict as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 if __name__ == "__main__":
