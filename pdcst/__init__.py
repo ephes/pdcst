@@ -126,7 +126,7 @@ def find_podcast_by_identifier(identifier: str) -> Podcast | None:
     all_podcasts = list_all_podcasts()
     found = None
     for podcast in all_podcasts:
-        if identifier in podcast.title.lower():
+        if identifier.casefold() in podcast.title.casefold():
             found = podcast
             break
     return found
@@ -136,7 +136,7 @@ def find_episode_by_identifier(podcast: Podcast, identifier: str) -> Episode | N
     episodes = list_all_episodes(podcast)
     found = None
     for episode in episodes:
-        if identifier in episode.title.lower():
+        if identifier.casefold() in episode.title.casefold():
             found = episode
             break
     return found
@@ -199,8 +199,10 @@ def download(podcast: str, episode: str):
     """
     podcast = find_podcast_by_identifier(podcast)
     if podcast is None:
-        return
+        raise typer.BadParameter("No matching podcast")
     episode = find_episode_by_identifier(podcast, episode)
+    if episode is None:
+        raise typer.BadParameter("No matching episode")
     target_path = contained_path(
         settings.root, podcast.directory, podcast.get_audio_file_name(episode)
     )

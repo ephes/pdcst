@@ -82,6 +82,10 @@ Download an episode which has "rest" in the title from the python podcast:
 $ pdcst download python rest
 ```
 
+Podcast and episode identifiers match title substrings without regard to case.
+A missing podcast or episode returns a concise error and nonzero exit status
+before computing download paths, writing metadata, or fetching audio.
+
 # Contribute
 
 ## Install Development Version
