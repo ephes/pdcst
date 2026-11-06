@@ -85,6 +85,14 @@ its timeout before the elapsed deadline is checked again). Fetch failures raise
 URLs resolve against the final response URL or its Content-Location header;
 HTTP Last-Modified remains a date fallback.
 
+## Browse subscriptions
+
+`pdcst podcasts` lists stored subscriptions with their episode counts.
+`pdcst episodes amber` lists episode titles for the first subscription whose
+title contains `amber`, ignoring case. An empty store, an empty show or an
+unmatched show produces no output and succeeds. Both commands read local
+metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
+
 ## Download
 
 Download an episode which has "rest" in the title from the python podcast:
@@ -147,6 +155,11 @@ Use a clean `dist/` directory so it contains only the wheel just built. Run the
 configured formatting/lint hooks as applicable before submitting changes.
 `PDCST_TEST_WHEEL=1` enables the wheel smoke check; leave it unset for ordinary
 editable installs, which skip that check.
+
+`tests/test_browsing_cli.py` invokes the registered browsing commands with
+CliRunner in fresh processes, setting `PDCST_HOME` before import. Synthetic
+on-disk stores verify output, repository selection and unchanged stored bytes;
+guards reject feed requests, downloads and repository writes.
 
 ## Storage and failure guarantees
 

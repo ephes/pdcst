@@ -1,5 +1,8 @@
 # Unreleased
 
+* Cover the registered subscription and episode browsing commands with isolated,
+  offline CLI tests for output, show selection, podcast association and unchanged
+  stored metadata; document their silent empty/no-match behavior.
 * Preserve valid local download associations when refreshing subscriptions.
 * Assign separate directories to distinct feeds with colliding titles and reject
   explicit cross-feed directory reuse.
