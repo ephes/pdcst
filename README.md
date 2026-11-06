@@ -139,6 +139,15 @@ unsafe paths must be corrected before use. Containment assumes other local
 processes do not change directory symlinks while a command is running.
 
 Downloads require an HTTP success response and follow at most five redirects.
+Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
+elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
+must be finite. Larger episodes can use higher limits. Declared lengths over the
+byte limit are rejected before creating output; each raw chunk is checked before
+writing, and elapsed time is checked again before publication. HTTP operations
+time out after at most 10 seconds (or the configured duration if smaller), so a
+blocked operation may finish its timeout before the elapsed limit is checked.
+Budget failures raise `ValueError`, preserve previous audio and download metadata,
+and remove only this download's temporary file.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
 must match the received bytes. Responses with a content encoding other than
 identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
