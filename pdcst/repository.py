@@ -175,6 +175,32 @@ class EpisodeRepository(JsonRepository):
     Store episodes metadata and audio files for a podcast.
     """
 
+    def import_list(self, models):
+        """Refresh feed metadata while retaining usable local download state."""
+        from . import contained_path
+
+        incoming = [self.storage_model_type(**model.dict()) for model in models]
+        with self._lock():
+            locked = self._fetch_all()
+            for model in incoming:
+                previous = locked.get(model.pk)
+                model.audio_file = None
+                if previous and previous.audio_file:
+                    name = previous.audio_file
+                    try:
+                        path = contained_path(self.base_dir, name)
+                        if (
+                            Path(name).name == name
+                            and "\\" not in name
+                            and path.is_file()
+                        ):
+                            model.audio_file = name
+                    except ValueError:
+                        pass
+                locked[model.pk] = model
+            self._write_models(locked)
+            self._all = None
+
     name = "episodes.json"
     storage_model_type = EpisodeInDb
     storage_model_list_type = EpisodeListInDb

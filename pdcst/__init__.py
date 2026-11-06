@@ -73,7 +73,7 @@ def subscribe(
 
     # add fetched episodes metadata to repository
     episodes_repo = EpisodeRepository(episode_dir)
-    episodes_repo.add_list(episodes)
+    episodes_repo.import_list(episodes)
     return podcast
 
 

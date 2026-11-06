@@ -63,6 +63,10 @@ Existing stored timestamps without a timezone are read as UTC, the legacy
 convention; explicitly offset timestamps are converted to UTC. Existing naive
 values cannot recover any historical host DST conversion error.
 
+Repeated subscriptions refresh feed metadata and keep existing download associations
+only when the stored filename still refers to a contained local file. New episodes
+start undownloaded.
+
 ## Download
 
 Download an episode which has "rest" in the title from the python podcast:
