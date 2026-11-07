@@ -101,6 +101,9 @@ HTTP Last-Modified remains a date fallback.
 title contains `amber`, ignoring case. An empty store, an empty show or an
 unmatched show produces no output and succeeds. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
+Every browse reloads current JSON without writing it, including repeated API calls
+using the same repository instance. Cooperating writers are visible on the next
+read. Default API repositories are created per call using the current settings.
 
 ## Download
 
@@ -189,7 +192,15 @@ byte limit are rejected before creating output; each raw chunk is checked before
 writing, and elapsed time is checked again before publication. HTTP operations
 time out after at most 10 seconds (or the configured duration if smaller), so a
 blocked operation may finish its timeout before the elapsed limit is checked.
-Budget failures raise `ValueError`, preserve previous audio and download metadata,
+The transfer helper `download_with_progress` raises `DownloadError` (a `ValueError`)
+for HTTP, transport and budget failures. Import these with
+`from pdcst.download import DownloadError, download_with_progress`; the exception
+is also available as `pdcst.DownloadError`. The command function
+`pdcst.download(podcast, episode)` converts expected failures to `typer.BadParameter`,
+including budget errors that previously escaped as `ValueError`.
+CLI downloads report a concise nonzero error without private URL userinfo, query
+or fragment values, or transport exception chains. HTTP failures include only
+their status code. Failures preserve previous audio and download metadata,
 and remove only this download's temporary file.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
 must match the received bytes. Responses with a content encoding other than
@@ -230,8 +241,8 @@ serialize cooperating writers across reload and atomic replacement. Do not
 remove either kind of lock file while commands are running. Failed serialization
 or writes leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. Existing corrupt JSON must be
-restored from backup; it is not silently overwritten. Mutations invalidate the
-same instance's cached list; use a new instance to observe other writers.
+restored from backup; it is not silently overwritten. Reads reload current JSON;
+each subscription listing uses one snapshot for metadata and legacy directories.
 
 Subscription refresh holds the podcast lock while importing episodes under their
 own lock, then publishes the subscription record last. Corrupt episode JSON or

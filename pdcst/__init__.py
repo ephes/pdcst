@@ -8,7 +8,7 @@ from pathlib import Path, PureWindowsPath
 import typer
 
 from .config import settings
-from .download import download_with_progress
+from .download import DownloadError, download_with_progress
 from .models import Episode, Podcast
 from .repository import (
     DownloadConflict,
@@ -47,12 +47,16 @@ def subscribe(
     feed_url: str,
     name_pattern: str,
     podcast_dir: str | None,
-    fp_repo=FeedParserRepository(),
-    podcasts_repo=PodcastRepository(settings.root),
+    fp_repo=None,
+    podcasts_repo=None,
 ) -> Podcast:
     """
     Subscribe to a podcast feed url.
     """
+    if fp_repo is None:
+        fp_repo = FeedParserRepository()
+    if podcasts_repo is None:
+        podcasts_repo = PodcastRepository(settings.root)
     with podcasts_repo.feed_lock(feed_url):
         return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo)
 
@@ -61,7 +65,6 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
     """Acquire and publish while the caller holds the per-feed lock."""
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
     with podcasts_repo._lock():
-        podcasts_repo._all = None
         subscriptions = podcasts_repo.list()
         if podcast_dir is None:
             existing = next(
@@ -115,14 +118,15 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
         # Import under the episode lock before publishing its subscription pointer.
         EpisodeRepository(episode_dir).import_list(episodes)
         podcasts_repo._write_models(locked)
-        podcasts_repo._all = None
     return podcast
 
 
-def list_all_podcasts(podcasts=PodcastRepository(settings.root)) -> list[Podcast]:
+def list_all_podcasts(podcasts=None) -> list[Podcast]:
     """
     List all podcasts.
     """
+    if podcasts is None:
+        podcasts = PodcastRepository(settings.root)
     return podcasts.list()
 
 
@@ -227,7 +231,7 @@ def download(podcast: str, episode: str):
         ).download_episode(
             episode, podcast.get_audio_file_name(episode), download_with_progress
         )
-    except (DownloadConflict, DuplicateIdentity) as error:
+    except (DownloadConflict, DuplicateIdentity, DownloadError) as error:
         raise typer.BadParameter(str(error)) from None
 
 

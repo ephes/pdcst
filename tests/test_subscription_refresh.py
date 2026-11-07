@@ -15,7 +15,7 @@ def test_refresh_preserves_valid_download(tmp_path, monkeypatch, podcast, episod
     episode.audio_file = "saved.mp3"
     repo = EpisodeRepository(directory)
     repo.add(episode)
-    # Prime a stale cache: importing must reload under the lock.
+    # Read once: importing must still reload under the lock.
     repo.list()
     fresh = copy.deepcopy(episode)
     fresh.audio_file = None
@@ -147,7 +147,7 @@ def test_episode_import_failure_keeps_subscription(
     if existing:
         repo.add(podcast)
     before = repo.path.read_bytes() if existing else None
-    original_subscription = repo.list()  # Also exercise cache invalidation.
+    original_subscription = repo.list()  # Read before the attempted import.
     fresh = copy.deepcopy(podcast)
     fresh.directory = "updated"
     fresh.episodes_count = 9

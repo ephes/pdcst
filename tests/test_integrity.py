@@ -137,7 +137,7 @@ def test_download_failure_leaves_metadata(tmp_path, monkeypatch, podcast, episod
     assert not list(repo.base_dir.glob("*.mp3"))
 
 
-def test_repository_cached_list(tmp_path, podcast):
+def test_repository_repeated_list(tmp_path, podcast):
     repo = PodcastRepository(tmp_path)
     assert repo.list() == []
     repo.add(podcast)

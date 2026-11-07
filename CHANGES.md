@@ -1,5 +1,13 @@
 # Unreleased
 
+* Reload browse reads and create default repositories per call so subscriptions
+  and updates from cooperating writers are visible without restarting.
+* Report expected audio HTTP, transport and budget failures as private, bounded
+  CLI errors, preserving old audio, metadata and completed-audio recovery behavior.
+  The transfer helper raises DownloadError (a ValueError); the command function
+  pdcst.download now converts these to typer.BadParameter, including budget errors
+  previously exposed as ValueError.
+
 * Refuse duplicate feed, incoming and stored identities before publication,
   including identical duplicates; preserve old JSON and audio on refusal.
 * Serialize same-feed acquisition through publication with stable per-feed locks,
