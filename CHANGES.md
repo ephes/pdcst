@@ -1,5 +1,11 @@
 # Unreleased
 
+* Allow help and empty browsing before the data root exists; create it only for
+  writing operations and report a configured file root as a concise CLI error.
+  Report add's storage-creation/update filesystem failures without raw exceptions.
+* Handle private categorized store-read errors in all commands, refusing writes
+  against unreadable existing metadata. Handle filename-pattern errors in download.
+
 * Bound regular metadata reads to 16 MiB and report private, categorized read errors.
 * Restore prior audio on metadata publication failure and retain completed staging
   bytes for recovery; allow retry without manually moving the final destination.

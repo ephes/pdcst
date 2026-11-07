@@ -11,6 +11,14 @@ Python 3.10 or newer is required. The current storage/settings APIs use Pydantic
 $ pipx install pdcst
 ```
 
+The default data root is `~/pdcst`; set `PDCST_HOME` to use a different path.
+No prerequisite `mkdir` is needed. Help and browsing work with a missing root
+without creating it. A writing operation such as `add` creates the root as needed;
+an existing file at the root is refused with a concise CLI error. If `add` cannot
+create or update local storage (for example, a parent is a file or write permission
+is denied), it reports a bounded filesystem error. Check `PDCST_HOME` and its
+permissions before retrying; underlying exception details are not printed.
+
 # Usage
 
 ## help
@@ -141,8 +149,8 @@ Flit should have already installed pytest:
 $ pytest
 ```
 
-For an isolated test run, create a writable data directory and set `PDCST_HOME`
-to it before running pytest. The package requires Pydantic 1 for its current
+For an isolated test run, set `PDCST_HOME` to a writable temporary path
+before running pytest. The package requires Pydantic 1 for its current
 storage and settings APIs. Formatting/lint checks are configured in
 `.pre-commit-config.yaml` (Black, isort, pyupgrade, Flake8 and file hygiene).
 No type-checking is configured. GitHub Actions runs the synthetic suite on Linux
@@ -172,6 +180,10 @@ editable installs, which skip that check.
 CliRunner in fresh processes, setting `PDCST_HOME` before import. Synthetic
 on-disk stores verify output, repository selection and unchanged stored bytes;
 guards reject feed requests, downloads and repository writes.
+`tests/test_cli_storage.py` also exercises fresh-process help/browse/add with a
+missing synthetic home, file-root refusal, private store-read diagnostics and
+filename errors before mutation. Permission failures are injected rather than
+relying on host permission behavior.
 
 ## Storage and failure guarantees
 
@@ -184,7 +196,8 @@ patterns must produce a single relative filename. Supported placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
-before metadata publication or audio transfer. Existing subscriptions with
+before metadata publication or audio transfer. Both `add` and `download` report
+pattern failures as concise CLI errors. Existing subscriptions with
 unsafe paths must be corrected before use. Containment assumes other local
 processes do not change directory symlinks while a command is running.
 
@@ -248,11 +261,15 @@ JSON repositories use stable `.json.lock` files and POSIX advisory locks to
 serialize cooperating writers across reload and atomic replacement. Do not
 remove either kind of lock file while commands are running. Failed serialization
 or writes leave the previous JSON intact; leftover temporary files after a killed process
-can be removed when no commands are running. Metadata reads require a regular UTF-8 JSON file of at most 16 MiB (including
+can be removed when no commands are running. Metadata reads require a regular
+UTF-8 JSON file of at most 16 MiB (including
 files that grow during the read). Missing stores remain empty. Nonregular files,
 oversize input, malformed JSON/schema and filesystem failures raise
 `StoreReadError` (`ValueError`) with the path and a trusted category, never stored
-record values. Existing corrupt JSON must be restored from backup; it is not silently overwritten. Reads reload current JSON;
+record values. Every CLI command reports these failures concisely with a nonzero
+exit status. Restore/correct the named store (or repair its read permissions)
+before retrying; writing operations refuse unreadable existing stores and never
+silently reset them. Reads reload current JSON;
 each subscription listing uses one snapshot for metadata and legacy directories.
 
 Subscription refresh holds the podcast lock while importing episodes under their

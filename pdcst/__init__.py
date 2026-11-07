@@ -9,13 +9,14 @@ import typer
 
 from .config import settings
 from .download import DownloadError, download_with_progress
-from .models import Episode, Podcast
+from .models import Episode, FilenamePatternError, Podcast
 from .repository import (
     DownloadConflict,
     DuplicateIdentity,
     EpisodeRepository,
     FeedParserRepository,
     PodcastRepository,
+    StoreReadError,
 )
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes"]
@@ -177,7 +178,12 @@ def add(
     try:
         podcast = subscribe(feed_url, name_pattern, podcast_dir)
     except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
+        raise typer.BadParameter(str(error)) from None
+    except OSError:
+        raise typer.BadParameter(
+            "Unable to update local storage: filesystem error; "
+            "check PDCST_HOME and write permissions"
+        ) from None
     print(f"Podcast {podcast.title} added")
 
 
@@ -188,7 +194,7 @@ def list_podcasts():
     """
     try:
         all_podcasts = list_all_podcasts()
-    except DuplicateIdentity as error:
+    except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:
         print(podcast)
@@ -206,7 +212,7 @@ def list_episodes(identifier: str):
         if podcast is None:
             return
         episodes = list_all_episodes(podcast)
-    except DuplicateIdentity as error:
+    except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for episode in episodes:
         print(episode)
@@ -231,7 +237,13 @@ def download(podcast: str, episode: str):
         ).download_episode(
             episode, podcast.get_audio_file_name(episode), download_with_progress
         )
-    except (DownloadConflict, DuplicateIdentity, DownloadError) as error:
+    except (
+        DownloadConflict,
+        DuplicateIdentity,
+        DownloadError,
+        FilenamePatternError,
+        StoreReadError,
+    ) as error:
         raise typer.BadParameter(str(error)) from None
 
 
