@@ -138,6 +138,13 @@ class JsonRepository:
 
     def __init__(self, base_dir):
         self.base_dir = Path(str(base_dir))
+        try:
+            if self.base_dir.exists() and not self.base_dir.is_dir():
+                raise StoreReadError(
+                    self.base_dir, "storage directory must be a directory"
+                )
+        except OSError:
+            raise StoreReadError(self.base_dir, "filesystem error") from None
 
     @property
     def path(self):
