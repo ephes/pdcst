@@ -13,6 +13,7 @@ import warnings
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from hashlib import sha256
 from operator import itemgetter
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -40,6 +41,25 @@ def parsed_date(value):
 
 class FeedError(ValueError):
     """A feed cannot supply usable podcast metadata."""
+
+
+class DuplicateIdentity(ValueError):
+    """A stored or incoming batch contains repeated identities."""
+
+
+def index_unique(models, key):
+    """Refuse repeated identities, including identical rows, before indexing."""
+    indexed = {}
+    positions = {}
+    for position, model in enumerate(models, 1):
+        identity = key(model)
+        if identity in indexed:
+            raise DuplicateIdentity(
+                f"Duplicate identity at positions {positions[identity]} and {position}"
+            )
+        indexed[identity] = model
+        positions[identity] = position
+    return indexed
 
 
 class DownloadConflict(ValueError):
@@ -118,10 +138,10 @@ class JsonRepository:
         Fetch dict of pydantic models from json in self.path
         """
         try:
-            return {
-                model.pk: model
-                for model in parse_file_as(list[self.storage_model_type], self.path)
-            }
+            return index_unique(
+                parse_file_as(list[self.storage_model_type], self.path),
+                lambda model: model.pk,
+            )
         except FileNotFoundError:
             return {}
 
@@ -172,10 +192,13 @@ class JsonRepository:
 
     def add_list(self, models):
         """Reload and atomically commit models under a stable advisory lock."""
-        models_in_db = [self.storage_model_type(**model.dict()) for model in models]
+        models_in_db = index_unique(
+            [self.storage_model_type(**model.dict()) for model in models],
+            lambda model: model.pk,
+        )
         with self._lock():
             locked = self._fetch_all()
-            for model_in_db in models_in_db:
+            for model_in_db in models_in_db.values():
                 locked[model_in_db.pk] = model_in_db
             self._write_models(locked)
             self._all = None
@@ -282,10 +305,13 @@ class EpisodeRepository(JsonRepository):
         """Refresh feed metadata while retaining usable local download state."""
         from . import contained_path
 
-        incoming = [self.storage_model_type(**model.dict()) for model in models]
+        incoming = index_unique(
+            [self.storage_model_type(**model.dict()) for model in models],
+            lambda model: model.pk,
+        )
         with self._lock():
             locked = self._fetch_all()
-            for model in incoming:
+            for model in incoming.values():
                 previous = locked.get(model.pk)
                 model.audio_file = None
                 if (
@@ -318,6 +344,19 @@ class PodcastRepository(JsonRepository):
     """
     Store podcasts metadata.
     """
+
+    @contextmanager
+    def feed_lock(self, url):
+        """Serialize one feed's acquisition through publication across processes."""
+        directory = self.base_dir / ".feed-locks"
+        directory.mkdir(parents=True, exist_ok=True)
+        name = sha256(url.encode("utf-8")).hexdigest() + ".lock"
+        with (directory / name).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
     def list(self, additional_attributes=None):
         from . import contained_path
@@ -490,6 +529,10 @@ class FeedParserRepository:
                 skipped += 1
                 continue
             episodes.append(episode)
+        try:
+            index_unique(episodes, lambda episode: episode["guid"])
+        except DuplicateIdentity as error:
+            raise FeedError(f"{error} (usable feed entries)") from None
         if not episodes:
             raise FeedError("Feed has no usable audio episodes")
         if skipped:

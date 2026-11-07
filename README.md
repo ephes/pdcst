@@ -65,6 +65,15 @@ Existing stored timestamps without a timezone are read as UTC, the legacy
 convention; explicitly offset timestamps are converted to UTC. Existing naive
 values cannot recover any historical host DST conversion error.
 
+Repeated GUIDs are rejected before publication, including identical repeated
+entries. Stored episode/subscription rows and incoming repository batches must
+also have unique identities. A duplicate error reports only row positions, never
+identity values; feed positions count usable entries only. The API raises
+`FeedError` for duplicate feed entries and `DuplicateIdentity` (a `ValueError`)
+for duplicate stored or incoming repository rows. CLI commands report these as
+concise errors. Restore or correct ambiguous legacy JSON before retrying. Refusal
+preserves existing JSON and audio.
+
 Repeated subscriptions refresh feed metadata and keep existing download associations
 only when the enclosure URL is unchanged and the stored filename still refers
 to a contained local file. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
@@ -231,3 +240,11 @@ counts unchanged. If subscription publication fails, imported episode metadata
 may already be updated; retrying preserves valid download associations. This is
 an ordered two-file update, not a crash-atomic transaction. New directories and
 stable lock files may remain after a failed import.
+
+Feed refreshes hold a stable per-feed POSIX advisory lock in `.feed-locks/`
+from before acquisition until publication finishes. Concurrent refreshes of the
+same URL wait and then fetch anew, so an older acquisition cannot overwrite a
+newer one. Different feeds acquire independently and share the subscription
+lock only during publication. Lock order is feed, subscription, then episode;
+refresh never takes the download claim lock. Failed refreshes release the lock
+and can be retried. Do not remove `.feed-locks/` files while commands are running.
