@@ -221,11 +221,11 @@ def test_ownership_is_rechecked_before_publication(store, monkeypatch):
     assert EpisodeRepository(repo.base_dir).all[other.guid].audio_file == target.name
 
 
-@pytest.mark.parametrize("existing", [False, True])
-def test_symlink_destination_refused(store, existing):
+@pytest.mark.parametrize("kind", ["missing", "existing", "loop"])
+def test_symlink_destination_refused(store, kind):
     repo, _, _, calls = store
-    destination = repo.base_dir / "other.mp3"
-    if existing:
+    destination = repo.base_dir / ("same.mp3" if kind == "loop" else "other.mp3")
+    if kind == "existing":
         destination.write_bytes(b"unrelated")
     (repo.base_dir / "same.mp3").symlink_to(destination)
     before = repo.path.read_bytes()
@@ -233,10 +233,11 @@ def test_symlink_destination_refused(store, existing):
         pdcst.download("show", "first")
     assert not calls
     assert repo.path.read_bytes() == before
-    if existing:
+    if kind == "existing":
         assert destination.read_bytes() == b"unrelated"
-    else:
+    elif kind == "missing":
         assert not destination.exists()
+    assert (repo.base_dir / "same.mp3").is_symlink()
 
 
 def test_same_guid_case_change_does_not_adopt_existing_file(store):
@@ -251,12 +252,16 @@ def test_same_guid_case_change_does_not_adopt_existing_file(store):
 
 
 @pytest.mark.parametrize("when", ["before", "during"])
-def test_unsafe_sibling_association_does_not_block_download(store, monkeypatch, when):
+@pytest.mark.parametrize("kind", ["outside", "loop"])
+def test_unsafe_sibling_association_does_not_block_download(
+    store, monkeypatch, when, kind
+):
     repo, _, other, calls = store
     outside = repo.base_dir.parent / "outside.mp3"
     outside.write_bytes(b"unrelated audio")
-    (repo.base_dir / "outside-link.mp3").symlink_to(outside)
-    other.audio_file = "outside-link.mp3"
+    link = repo.base_dir / "sibling-link.mp3"
+    link.symlink_to(link.name if kind == "loop" else outside)
+    other.audio_file = link.name
     transfer = pdcst.download_with_progress
     if when == "before":
         repo.add(other)

@@ -2,6 +2,7 @@
 
 * Claim download destinations by episode GUID, refusing cross-episode collisions,
   unowned files, symlinks and repository filenames before transfer/publication.
+  Ignore unsafe sibling associations, including symlink loops, when checking ownership.
 * Commit only download associations against the current enclosure URL, preserving
   refreshed feed metadata and retaining completed conflicting audio for recovery.
   Drop old download associations when a feed changes the enclosure URL.

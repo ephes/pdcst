@@ -199,9 +199,9 @@ class EpisodeRepository(JsonRepository):
             )
         if Path(name).name != name:
             raise DownloadConflict("Episode name must be a single relative file name")
-        target = contained_path(self.base_dir, name)
         if (self.base_dir / name).is_symlink():
             raise DownloadConflict("Audio destination must not be a symlink")
+        target = contained_path(self.base_dir, name)
         current = locked.get(guid)
         if current is None or current.audio_url != audio_url:
             raise DownloadConflict(
@@ -220,8 +220,8 @@ class EpisodeRepository(JsonRepository):
                 continue
             try:
                 owner_key = path_key(row.audio_file)
-            except ValueError:
-                # An unsafe legacy association cannot own a contained file.
+            except (ValueError, RuntimeError):
+                # Unsafe paths and symlink loops cannot own a contained file.
                 continue
             if owner_key == key:
                 raise DownloadConflict(
