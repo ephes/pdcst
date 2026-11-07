@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import typer
 from pydantic import ValidationError
 
 import pdcst
@@ -66,7 +67,7 @@ def test_audio_budget_preserves_audio_and_metadata(
         "Client",
         lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
     )
-    with pytest.raises(ValueError, match="Audio download.*limit"):
+    with pytest.raises(typer.BadParameter, match="Audio download.*limit"):
         pdcst.download("synthetic", "synthetic")
     assert target.read_bytes() == b"old"
     assert repo.path.read_bytes() == before

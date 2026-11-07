@@ -124,8 +124,6 @@ class JsonRepository:
     and maybe get/update/remove them.
     """
 
-    _all = None
-
     def __init__(self, base_dir):
         self.base_dir = Path(str(base_dir))
 
@@ -147,12 +145,8 @@ class JsonRepository:
 
     @property
     def all(self):
-        """
-        Cache fetching all models from file.
-        """
-        if self._all is None:
-            self._all = self._fetch_all()
-        return self._all
+        """Read current models without retaining an unversioned cache."""
+        return self._fetch_all()
 
     def list(self, additional_attributes=None):
         """
@@ -201,7 +195,6 @@ class JsonRepository:
             for model_in_db in models_in_db.values():
                 locked[model_in_db.pk] = model_in_db
             self._write_models(locked)
-            self._all = None
 
 
 class EpisodeRepository(JsonRepository):
@@ -289,7 +282,6 @@ class EpisodeRepository(JsonRepository):
                     os.replace(stage, target)
                     current.audio_file = name
                     self._write_models(locked)
-                    self._all = None
             except Exception as error:
                 if completed and stage.exists():
                     recovery = f"completed audio retained at {stage}"
@@ -332,7 +324,6 @@ class EpisodeRepository(JsonRepository):
                         pass
                 locked[model.pk] = model
             self._write_models(locked)
-            self._all = None
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb
@@ -361,8 +352,14 @@ class PodcastRepository(JsonRepository):
     def list(self, additional_attributes=None):
         from . import contained_path
 
-        podcasts = super().list(additional_attributes)
-        for podcast, stored in zip(podcasts, self.all.values()):
+        stored_models = list(self.all.values())
+        podcasts = [
+            self.domain_model_type.from_dict(
+                model.dict() | (additional_attributes or {})
+            )
+            for model in stored_models
+        ]
+        for podcast, stored in zip(podcasts, stored_models):
             if stored.directory is None:
                 legacy = stored.title.lower().replace(" ", "_")
                 try:

@@ -13,8 +13,7 @@ import pdcst
 from pdcst.models import Episode, Feed, Podcast
 from pdcst.repository import EpisodeRepository, PodcastRepository
 
-# Import in a fresh process: list_all_podcasts binds its default repository at
-# import time. Changing settings.root afterwards would not exercise PDCST_HOME.
+# Import in a fresh process so settings reads PDCST_HOME from the environment.
 CLI_PROBE = """
 import json
 import sys
