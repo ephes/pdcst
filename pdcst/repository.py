@@ -5,6 +5,7 @@ Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
 import fcntl
+import json
 import os
 import stat
 import time
@@ -21,10 +22,21 @@ from uuid import uuid4
 
 import feedparser
 import httpx
-from pydantic import BaseModel, parse_file_as, validator
+from pydantic import BaseModel, ValidationError, parse_obj_as, validator
 
 from .models import Episode, Podcast
 from .storage import replacement_file
+
+STORE_MAX_BYTES = 16 * 1024**2
+
+
+class StoreReadError(ValueError):
+    """Metadata could not be read; diagnostics contain no stored values."""
+
+    def __init__(self, path, category):
+        self.path = path
+        self.category = category
+        super().__init__(f"Cannot read metadata {path}: {category}")
 
 
 def as_utc(value):
@@ -136,12 +148,36 @@ class JsonRepository:
         Fetch dict of pydantic models from json in self.path
         """
         try:
-            return index_unique(
-                parse_file_as(list[self.storage_model_type], self.path),
-                lambda model: model.pk,
-            )
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
         except FileNotFoundError:
             return {}
+        except OSError:
+            raise StoreReadError(self.path, "filesystem error") from None
+        try:
+            with os.fdopen(descriptor, "rb") as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise StoreReadError(self.path, "not a regular file")
+                if info.st_size > STORE_MAX_BYTES:
+                    raise StoreReadError(self.path, "size limit exceeded (16 MiB)")
+                data = source.read(STORE_MAX_BYTES + 1)
+                if len(data) > STORE_MAX_BYTES:
+                    raise StoreReadError(self.path, "size limit exceeded (16 MiB)")
+        except OSError:
+            raise StoreReadError(self.path, "filesystem error") from None
+        try:
+            decoded = data.decode("utf-8")
+        except UnicodeError:
+            raise StoreReadError(self.path, "invalid UTF-8") from None
+        try:
+            values = json.loads(decoded)
+        except (ValueError, RecursionError):
+            raise StoreReadError(self.path, "invalid JSON") from None
+        try:
+            models = parse_obj_as(list[self.storage_model_type], values)
+        except (ValidationError, RecursionError, OverflowError):
+            raise StoreReadError(self.path, "invalid schema") from None
+        return index_unique(models, lambda model: model.pk)
 
     @property
     def all(self):
@@ -279,10 +315,30 @@ class EpisodeRepository(JsonRepository):
                     )
                     if target.exists():
                         stage.chmod(stat.S_IMODE(target.stat().st_mode))
-                    os.replace(stage, target)
-                    current.audio_file = name
-                    self._write_models(locked)
-            except Exception as error:
+                    backup = None
+                    if target.exists():
+                        backup = (
+                            self.base_dir / f".pdcst-download-{uuid4().hex}.previous"
+                        )
+                    published = False
+                    try:
+                        if backup is not None:
+                            os.replace(target, backup)
+                        os.replace(stage, target)
+                        published = True
+                        current.audio_file = name
+                        self._write_models(locked)
+                    except BaseException:
+                        # Keep completed bytes recoverable and the old association valid.
+                        if published:
+                            os.replace(target, stage)
+                        if backup is not None and backup.exists():
+                            os.replace(backup, target)
+                        raise
+                    else:
+                        if backup is not None:
+                            backup.unlink()
+            except BaseException as error:
                 if completed and stage.exists():
                     recovery = f"completed audio retained at {stage}"
                     if isinstance(error, DownloadConflict):

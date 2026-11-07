@@ -5,7 +5,12 @@ All the domain models for pdcst live here.
 
 import re
 from pathlib import PureWindowsPath
+from string import Formatter
 from urllib.parse import urlsplit
+
+
+class FilenamePatternError(ValueError):
+    """A pattern cannot produce a supported single filename."""
 
 
 class Feed:
@@ -107,15 +112,41 @@ class Podcast:
             "index": episode.index,
             "title": self.title_for_filename(episode.title),
         }
-        name = self.file_name_pattern.format(**details)
+        try:
+            for _, field, spec, conversion in Formatter().parse(self.file_name_pattern):
+                if field is None:
+                    continue
+                if (
+                    field not in details
+                    or conversion is not None
+                    or "{" in spec
+                    or "}" in spec
+                ):
+                    raise ValueError
+            name = self.file_name_pattern.format(**details)
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+            IndexError,
+            AttributeError,
+            OverflowError,
+        ):
+            raise FilenamePatternError(
+                "Invalid filename pattern: use index, title and file_format "
+                "without traversal, conversions or nested fields"
+            ) from None
         if (
             not name
             or name in {".", ".."}
             or "/" in name
             or "\\" in name
+            or "\x00" in name
             or PureWindowsPath(name).drive
         ):
-            raise ValueError("Episode name must be a single relative file name")
+            raise FilenamePatternError(
+                "Invalid filename pattern: episode name must be a single relative file name"
+            )
         return name
 
 
