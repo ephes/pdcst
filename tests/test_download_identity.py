@@ -323,3 +323,59 @@ def test_unicode_alias_unowned_file_is_preserved(store):
     assert not calls
     assert target.read_bytes() == b"unrelated audio"
     assert repo.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("existing_audio", [False, True])
+@pytest.mark.parametrize("failure", ["serialization", "replace", "interrupt"])
+def test_metadata_failure_rolls_back_audio(store, monkeypatch, existing_audio, failure):
+    from pdcst import repository
+
+    repo, episode, _, calls = store
+    target = repo.base_dir / "same.mp3"
+    unrelated = repo.base_dir / "unrelated.mp3"
+    unrelated.write_bytes(b"unrelated")
+    if existing_audio:
+        episode.audio_file = target.name
+        repo.add(episode)
+        target.write_bytes(b"previous audio")
+    before = repo.path.read_bytes()
+    injected = []
+
+    def fail_write(self, models):
+        injected.append(True)
+        if failure == "interrupt":
+            raise KeyboardInterrupt("synthetic interrupt")
+        raise TypeError("synthetic serialization failure")
+
+    original_replace = repository.os.replace
+
+    def fail_replace(source, destination):
+        if Path(destination) == repo.path:
+            injected.append(True)
+            raise OSError("synthetic metadata replace failure")
+        return original_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        if failure in {"serialization", "interrupt"}:
+            patch.setattr(EpisodeRepository, "_write_models", fail_write)
+        else:
+            patch.setattr(repository.os, "replace", fail_replace)
+        with pytest.warns(RuntimeWarning, match="completed audio retained at"):
+            with pytest.raises(
+                (TypeError, OSError, KeyboardInterrupt), match="synthetic"
+            ):
+                pdcst.download("show", "first")
+    assert injected == [True]
+    assert repo.path.read_bytes() == before
+    if existing_audio:
+        assert target.read_bytes() == b"previous audio"
+    else:
+        assert not target.exists()
+    stages = list(repo.base_dir.glob(".pdcst-download-*"))
+    assert len(stages) == 1
+    assert stages[0].read_bytes() == b"synthetic audio"
+    assert unrelated.read_bytes() == b"unrelated"
+    pdcst.download("show", "first")
+    assert len(calls) == 2
+    assert target.read_bytes() == b"synthetic audio"
+    assert repo.all[episode.guid].audio_file == target.name

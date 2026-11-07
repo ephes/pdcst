@@ -180,7 +180,11 @@ are converted to single safe components for new subscriptions. Existing stored
 directory names and contained legacy directories remain stable. `--podcast-dir` may specify a relative
 subdirectory within that root; absolute paths, parent traversal, Windows paths,
 and symlinks resolving outside the root are rejected before writing. Filename
-patterns must produce a single relative filename. Existing subscriptions with
+patterns must produce a single relative filename. Supported placeholders are
+`{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
+and escaped literal braces are supported; attribute/index traversal, conversions
+and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
+before metadata publication or audio transfer. Existing subscriptions with
 unsafe paths must be corrected before use. Containment assumes other local
 processes do not change directory symlinks while a command is running.
 
@@ -232,16 +236,23 @@ uses the complete URL, including query parameters; feeds that rotate signed or
 tracking URLs therefore invalidate associations even if their audio is unchanged. Recovery files can
 be inspected/moved manually; they are never automatically adopted. Failed transfers
 remove their own staging file. Audio replacement and JSON publication are ordered,
-not a crash-atomic transaction: a JSON write failure may leave complete audio at the
-destination without an association; preserve/move it before retrying. Publication
-errors that leave a completed staging file also report its recovery path.
+not a crash-atomic transaction. For an ordinary JSON serialization/write failure,
+publication moves completed audio back to its `.pdcst-download-*` staging path
+and restores any previous owned audio, keeping the old JSON association valid.
+The warning reports the completed staging path; retrying the command is safe.
+Recovery files are retained for manual inspection and are not adopted on retry.
+This compensation assumes the filesystem still permits rollback renames; a process
+crash or rollback I/O failure can require manual recovery.
 
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
 serialize cooperating writers across reload and atomic replacement. Do not
 remove either kind of lock file while commands are running. Failed serialization
 or writes leave the previous JSON intact; leftover temporary files after a killed process
-can be removed when no commands are running. Existing corrupt JSON must be
-restored from backup; it is not silently overwritten. Reads reload current JSON;
+can be removed when no commands are running. Metadata reads require a regular UTF-8 JSON file of at most 16 MiB (including
+files that grow during the read). Missing stores remain empty. Nonregular files,
+oversize input, malformed JSON/schema and filesystem failures raise
+`StoreReadError` (`ValueError`) with the path and a trusted category, never stored
+record values. Existing corrupt JSON must be restored from backup; it is not silently overwritten. Reads reload current JSON;
 each subscription listing uses one snapshot for metadata and legacy directories.
 
 Subscription refresh holds the podcast lock while importing episodes under their

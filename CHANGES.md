@@ -1,5 +1,10 @@
 # Unreleased
 
+* Bound regular metadata reads to 16 MiB and report private, categorized read errors.
+* Restore prior audio on metadata publication failure and retain completed staging
+  bytes for recovery; allow retry without manually moving the final destination.
+* Validate filename template fields and format syntax before publication.
+
 * Reload browse reads and create default repositories per call so subscriptions
   and updates from cooperating writers are visible without restarting.
 * Report expected audio HTTP, transport and budget failures as private, bounded
