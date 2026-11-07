@@ -5,7 +5,10 @@ Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
 import fcntl
+import os
+import stat
 import time
+import unicodedata
 import warnings
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -13,6 +16,7 @@ from email.utils import parsedate_to_datetime
 from operator import itemgetter
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
+from uuid import uuid4
 
 import feedparser
 import httpx
@@ -36,6 +40,10 @@ def parsed_date(value):
 
 class FeedError(ValueError):
     """A feed cannot supply usable podcast metadata."""
+
+
+class DownloadConflict(ValueError):
+    """Episode identity or destination ownership changed."""
 
 
 class FeedInDb(BaseModel):
@@ -178,6 +186,98 @@ class EpisodeRepository(JsonRepository):
     Store episodes metadata and audio files for a podcast.
     """
 
+    def _download_record(self, locked, guid, audio_url, name):
+        """Validate identity and exclusive ownership while holding the JSON lock."""
+        from . import contained_path
+
+        reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
+        if name.casefold() in reserved or name.casefold().startswith(
+            ".pdcst-download-"
+        ):
+            raise DownloadConflict(
+                "Episode filename is reserved for repository storage"
+            )
+        if Path(name).name != name:
+            raise DownloadConflict("Episode name must be a single relative file name")
+        if (self.base_dir / name).is_symlink():
+            raise DownloadConflict("Audio destination must not be a symlink")
+        target = contained_path(self.base_dir, name)
+        current = locked.get(guid)
+        if current is None or current.audio_url != audio_url:
+            raise DownloadConflict(
+                "Episode missing or enclosure changed; retry download"
+            )
+
+        def name_key(value):
+            return unicodedata.normalize("NFC", value).casefold()
+
+        def path_key(filename):
+            return name_key(str(contained_path(self.base_dir, filename)))
+
+        key = path_key(name)
+        for row in locked.values():
+            if row.guid == guid or not row.audio_file:
+                continue
+            try:
+                owner_key = path_key(row.audio_file)
+            except (ValueError, RuntimeError):
+                # Unsafe paths and symlink loops cannot own a contained file.
+                continue
+            if owner_key == key:
+                raise DownloadConflict(
+                    "Audio destination is already owned by another episode"
+                )
+        owned = current.audio_file == name
+        # Conservative case folding gives the same refusal policy on every host.
+        if not owned and (
+            target.exists()
+            or any(name_key(p.name) == name_key(name) for p in self.base_dir.iterdir())
+        ):
+            raise DownloadConflict(
+                "Audio destination contains an unowned existing file"
+            )
+        return current, target
+
+    def download_episode(self, episode, name, transfer):
+        """Claim audio, transfer outside the JSON lock, then commit only its link."""
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        claim = self.path.with_suffix(self.path.suffix + ".download.lock")
+        with claim.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            # Closing the descriptor releases the claim even when transfer fails.
+            with self._lock():
+                self._download_record(
+                    self._fetch_all(), episode.guid, episode.audio_url, name
+                )
+            stage = self.base_dir / f".pdcst-download-{uuid4().hex}"
+            descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            os.close(descriptor)
+            completed = False
+            try:
+                transfer(episode.audio_url, stage)
+                completed = True
+                with self._lock():
+                    locked = self._fetch_all()
+                    current, target = self._download_record(
+                        locked, episode.guid, episode.audio_url, name
+                    )
+                    if target.exists():
+                        stage.chmod(stat.S_IMODE(target.stat().st_mode))
+                    os.replace(stage, target)
+                    current.audio_file = name
+                    self._write_models(locked)
+                    self._all = None
+            except Exception as error:
+                if completed and stage.exists():
+                    recovery = f"completed audio retained at {stage}"
+                    if isinstance(error, DownloadConflict):
+                        raise DownloadConflict(f"{error}; {recovery}") from error
+                    warnings.warn(recovery, RuntimeWarning, stacklevel=2)
+                raise
+            finally:
+                if not completed:
+                    stage.unlink(missing_ok=True)
+
     def import_list(self, models):
         """Refresh feed metadata while retaining usable local download state."""
         from . import contained_path
@@ -188,7 +288,11 @@ class EpisodeRepository(JsonRepository):
             for model in incoming:
                 previous = locked.get(model.pk)
                 model.audio_file = None
-                if previous and previous.audio_file:
+                if (
+                    previous
+                    and previous.audio_file
+                    and previous.audio_url == model.audio_url
+                ):
                     name = previous.audio_file
                     try:
                         path = contained_path(self.base_dir, name)

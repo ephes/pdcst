@@ -22,6 +22,7 @@ def test_download_selections(tmp_path, monkeypatch, podcast, episode):
         assert message in result.output
         assert "Traceback" not in result.output
         assert not calls and not list(tmp_path.iterdir())
+    EpisodeRepository(tmp_path / podcast.directory).add(episode)
     result = runner.invoke(pdcst.cli, ["download", "PyThOn", "ReFaCtOr"], color=False)
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
