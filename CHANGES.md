@@ -1,5 +1,10 @@
 # Unreleased
 
+* Refuse duplicate feed, incoming and stored identities before publication,
+  including identical duplicates; preserve old JSON and audio on refusal.
+* Serialize same-feed acquisition through publication with stable per-feed locks,
+  allowing different feeds to acquire independently.
+
 * Claim download destinations by episode GUID, refusing cross-episode collisions,
   unowned files, symlinks and repository filenames before transfer/publication.
   Ignore unsafe sibling associations, including symlink loops, when checking ownership.

@@ -12,6 +12,7 @@ from .download import download_with_progress
 from .models import Episode, Podcast
 from .repository import (
     DownloadConflict,
+    DuplicateIdentity,
     EpisodeRepository,
     FeedParserRepository,
     PodcastRepository,
@@ -52,7 +53,12 @@ def subscribe(
     """
     Subscribe to a podcast feed url.
     """
-    # add fetched podcast metadata to repository
+    with podcasts_repo.feed_lock(feed_url):
+        return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo)
+
+
+def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
+    """Acquire and publish while the caller holds the per-feed lock."""
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
     with podcasts_repo._lock():
         podcasts_repo._all = None
@@ -176,7 +182,10 @@ def list_podcasts():
     """
     List your podcast subscriptions.
     """
-    all_podcasts = list_all_podcasts()
+    try:
+        all_podcasts = list_all_podcasts()
+    except DuplicateIdentity as error:
+        raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:
         print(podcast)
 
@@ -188,10 +197,13 @@ def list_episodes(identifier: str):
 
     pdcst episodes python
     """
-    podcast = find_podcast_by_identifier(identifier)
-    if podcast is None:
-        return
-    episodes = list_all_episodes(podcast)
+    try:
+        podcast = find_podcast_by_identifier(identifier)
+        if podcast is None:
+            return
+        episodes = list_all_episodes(podcast)
+    except DuplicateIdentity as error:
+        raise typer.BadParameter(str(error)) from None
     for episode in episodes:
         print(episode)
 
@@ -203,20 +215,20 @@ def download(podcast: str, episode: str):
 
     pdcst download python htmx
     """
-    podcast = find_podcast_by_identifier(podcast)
-    if podcast is None:
-        raise typer.BadParameter("No matching podcast")
-    episode = find_episode_by_identifier(podcast, episode)
-    if episode is None:
-        raise typer.BadParameter("No matching episode")
     try:
+        podcast = find_podcast_by_identifier(podcast)
+        if podcast is None:
+            raise typer.BadParameter("No matching podcast")
+        episode = find_episode_by_identifier(podcast, episode)
+        if episode is None:
+            raise typer.BadParameter("No matching episode")
         EpisodeRepository(
             contained_path(settings.root, podcast.directory)
         ).download_episode(
             episode, podcast.get_audio_file_name(episode), download_with_progress
         )
-    except DownloadConflict as error:
-        raise typer.BadParameter(str(error)) from error
+    except (DownloadConflict, DuplicateIdentity) as error:
+        raise typer.BadParameter(str(error)) from None
 
 
 if __name__ == "__main__":
