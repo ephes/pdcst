@@ -119,8 +119,8 @@ def test_download_atomic(tmp_path, monkeypatch, case):
 
 def test_download_failure_leaves_metadata(tmp_path, monkeypatch, podcast, episode):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _: podcast)
-    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_: episode)
+    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
+    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
 
     def fail(*_):
         raise httpx.ReadError("disconnect")

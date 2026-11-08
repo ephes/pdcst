@@ -99,3 +99,74 @@ def test_unrepresentable_utc_date_is_invalid_schema(tmp_path, field):
     with pytest.raises(ValueError, match="invalid schema") as error:
         repo.list()
     assert "SIGNED_SENTINEL" not in str(error.value)
+
+
+@pytest.mark.parametrize("headroom", [1, 0, -1])
+@pytest.mark.parametrize("operation", ["add_list", "import_list"])
+def test_write_obeys_read_byte_ceiling(
+    tmp_path, monkeypatch, episode, headroom, operation
+):
+    import copy
+
+    repo = EpisodeRepository(tmp_path)
+    episode.audio_file = "saved.mp3"
+    audio = tmp_path / episode.audio_file
+    audio.write_bytes(b"synthetic audio")
+    repo.add(episode)
+    before = repo.path.read_bytes()
+    incoming = copy.deepcopy(episode)
+    incoming.title = "Unicode \u00e9\U0001f40d" * 20
+    stored = repo.storage_model_type(**incoming.dict())
+    # Exercise real UTF-8 bytes rather than ASCII-only JSON escaping.
+    original_json = repo.storage_model_list_type.json
+    monkeypatch.setattr(
+        repo.storage_model_list_type,
+        "json",
+        lambda self: original_json(self, ensure_ascii=False),
+    )
+    encoded = repo.storage_model_list_type(__root__=[stored]).json().encode("utf-8")
+    monkeypatch.setattr(repository, "STORE_MAX_BYTES", len(encoded) + headroom)
+    if headroom < 0:
+        with pytest.raises(ValueError, match="metadata.*size limit"):
+            getattr(repo, operation)([incoming])
+        assert repo.path.read_bytes() == before
+    else:
+        getattr(repo, operation)([incoming])
+        assert len(repo.path.read_bytes()) == len(encoded)
+    assert repo.list()[0].audio_file == "saved.mp3"
+    assert audio.read_bytes() == b"synthetic audio"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_oversized_subscription_precedes_episode_import(
+    tmp_path, monkeypatch, podcast, episode
+):
+    import copy
+
+    import pdcst
+    from pdcst.repository import PodcastRepository
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcasts = PodcastRepository(tmp_path)
+    podcasts.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_file = "saved.mp3"
+    episodes.add(episode)
+    audio = episodes.base_dir / episode.audio_file
+    audio.write_bytes(b"synthetic audio")
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    updated = copy.deepcopy(podcast)
+    updated.title = "x" * 5000
+    incoming = copy.deepcopy(episode)
+    incoming.audio_url = "https://example.test/changed.mp3"
+    monkeypatch.setattr(repository, "STORE_MAX_BYTES", 2048)
+
+    class Parser:
+        def get(self, *_):
+            return updated, [incoming]
+
+    with pytest.raises(ValueError, match="metadata.*size limit"):
+        pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    assert episodes.list()[0].audio_file == "saved.mp3"
+    assert audio.read_bytes() == b"synthetic audio"

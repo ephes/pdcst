@@ -23,11 +23,11 @@ def store(tmp_path, monkeypatch, podcast, episode):
     other.guid = "second-guid"
     repo = EpisodeRepository(tmp_path / podcast.directory)
     repo.add_list([episode, other])
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _: podcast)
+    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
     monkeypatch.setattr(
         pdcst,
         "find_episode_by_identifier",
-        lambda _, key: copy.deepcopy(episode if key == "first" else other),
+        lambda _, key, **kw: copy.deepcopy(episode if key == "first" else other),
     )
     calls = []
 

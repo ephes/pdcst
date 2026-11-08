@@ -48,8 +48,8 @@ def test_cli_download_errors_are_private_and_preserve_state(
     target = repo.base_dir / "saved.mp3"
     target.write_bytes(b"old audio")
     before = repo.path.read_bytes()
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _: podcast)
-    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_: episode)
+    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
+    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
 
     class Stream(httpx.SyncByteStream):
         def __iter__(self):
