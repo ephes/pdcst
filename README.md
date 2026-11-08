@@ -229,9 +229,9 @@ for HTTP, transport and budget failures. Import these with
 is also available as `pdcst.DownloadError`. The command function
 `pdcst.download(podcast, episode)` converts expected failures to `typer.BadParameter`,
 including budget errors that previously escaped as `ValueError`.
-CLI downloads report a concise nonzero error without private URL userinfo, query
+CLI download failures report a concise nonzero error without private URL userinfo, query
 or fragment values, or transport exception chains. HTTP failures include only
-their status code. Failures preserve previous audio and download metadata,
+their status code. Transfer failures preserve previous audio and download metadata,
 and remove only this download's temporary file.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
 must match the received bytes. Responses with a content encoding other than
@@ -271,8 +271,22 @@ publication moves completed audio back to its `.pdcst-download-*` staging path
 and restores any previous owned audio, keeping the old JSON association valid.
 The warning reports the completed staging path; retrying the command is safe.
 Recovery files are retained for manual inspection and are not adopted on retry.
-This compensation assumes the filesystem still permits rollback renames; a process
-crash or rollback I/O failure can require manual recovery.
+If a rollback rename also fails, the initiating exception is preserved and a
+bounded warning reports the exact paths of the retained completed and previous
+audio. Restoration proceeds only when the destination has been safely vacated;
+it never overwrites completed bytes after a failed move. The old JSON remains
+unchanged, but its audio may need manual restoration. Before retrying, move any
+completed audio still at the destination to a reserved `.pdcst-download-*` path,
+and restore previous audio from the reported `.previous` backup if needed.
+Retries never adopt or remove reserved recovery files. A process crash can also
+require manual recovery.
+
+Once audio and JSON have both been published, failure to remove the previous
+backup is a cleanup warning: the download succeeds, and `download_episode`
+returns the completed destination path. The warning names the retained
+`.pdcst-download-*.previous` file without filesystem exception details. That
+backup may be removed manually after checking the new audio and metadata; no
+repeat transfer is needed.
 
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
 serialize cooperating writers across reload and atomic replacement. Do not

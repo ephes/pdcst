@@ -1,5 +1,11 @@
 # Unreleased
 
+* Keep successful downloads successful when previous-backup retirement fails;
+  report the retained backup with a bounded cleanup warning.
+* Preserve the initiating publication error when audio rollback also fails;
+  retain both audio versions, report their recovery paths, and avoid overwriting
+  completed bytes during incomplete restoration.
+
 * Close the temporary descriptor when stream creation fails; cover atomic storage
   publication and cleanup with binary/text fault and interruption tests.
 * Drop unusable refresh audio associations, including symlinks, loops, reserved
