@@ -325,6 +325,7 @@ class EpisodeRepository(JsonRepository):
             descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
             os.close(descriptor)
             completed = False
+            rollback_failed = False
             try:
                 transfer(episode.audio_url, stage)
                 completed = True
@@ -341,25 +342,58 @@ class EpisodeRepository(JsonRepository):
                             self.base_dir / f".pdcst-download-{uuid4().hex}.previous"
                         )
                     published = False
+                    previous_moved = False
                     try:
                         if backup is not None:
                             os.replace(target, backup)
+                            previous_moved = True
                         os.replace(stage, target)
                         published = True
                         current.audio_file = name
                         self._write_models(locked)
                     except BaseException:
-                        # Keep completed bytes recoverable and the old association valid.
+                        # Never overwrite completed bytes if moving them aside fails.
                         if published:
-                            os.replace(target, stage)
-                        if backup is not None and backup.exists():
-                            os.replace(backup, target)
+                            try:
+                                os.replace(target, stage)
+                            except BaseException:
+                                rollback_failed = True
+                            else:
+                                published = False
+                        if previous_moved and not published:
+                            try:
+                                os.replace(backup, target)
+                            except BaseException:
+                                rollback_failed = True
                         raise
                     else:
                         if backup is not None:
-                            backup.unlink()
+                            try:
+                                backup.unlink()
+                            except OSError:
+                                warnings.warn(
+                                    "Download completed; cleanup could not remove "
+                                    f"previous audio retained at {backup}",
+                                    RuntimeWarning,
+                                    stacklevel=2,
+                                )
+                        return target
             except BaseException as error:
-                if completed and stage.exists():
+                if rollback_failed:
+                    recovery = target if published else stage
+                    previous = (
+                        f"; previous audio retained at {backup}"
+                        if previous_moved
+                        else ""
+                    )
+                    warnings.warn(
+                        "Download rollback incomplete; "
+                        f"completed audio retained at {recovery}{previous}; "
+                        "move retained audio aside or restore it before retrying",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                elif completed and stage.exists():
                     recovery = f"completed audio retained at {stage}"
                     if isinstance(error, DownloadConflict):
                         raise DownloadConflict(f"{error}; {recovery}") from error

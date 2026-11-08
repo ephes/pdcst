@@ -379,3 +379,122 @@ def test_metadata_failure_rolls_back_audio(store, monkeypatch, existing_audio, f
     assert len(calls) == 2
     assert target.read_bytes() == b"synthetic audio"
     assert repo.all[episode.guid].audio_file == target.name
+
+
+@pytest.mark.parametrize("caller", ["cli", "repository"])
+def test_backup_retirement_failure_is_success(store, monkeypatch, caller):
+    from typer.testing import CliRunner
+
+    repo, episode, _, calls = store
+    target = repo.base_dir / "same.mp3"
+    episode.audio_file = target.name
+    repo.add(episode)
+    target.write_bytes(b"previous audio")
+    original_unlink = Path.unlink
+    injected = []
+
+    def fail_backup(path, *args, **kwargs):
+        if path.name.endswith(".previous"):
+            injected.append(path)
+            raise OSError("private cleanup failure")
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", fail_backup)
+        with pytest.warns(
+            RuntimeWarning, match="Download completed.*previous audio"
+        ) as recorded:
+            if caller == "cli":
+                result = CliRunner().invoke(pdcst.cli, ["download", "show", "first"])
+                assert result.exit_code == 0, result.exception
+            else:
+                result = repo.download_episode(
+                    episode, target.name, pdcst.download_with_progress
+                )
+                assert result == target
+    assert len(calls) == 1
+    assert len(injected) == 1
+    (backup,) = injected
+    assert str(backup) in str(recorded[0].message)
+    assert "private cleanup failure" not in str(recorded[0].message)
+    assert backup.read_bytes() == b"previous audio"
+    assert target.read_bytes() == b"synthetic audio"
+    assert repo.all[episode.guid].audio_file == target.name
+    before = repo.path.read_bytes()
+    backup.unlink()
+    assert repo.path.read_bytes() == before
+    assert target.read_bytes() == b"synthetic audio"
+
+
+@pytest.mark.parametrize("rollback_step", ["completed", "previous"])
+@pytest.mark.parametrize("primary", [TypeError, KeyboardInterrupt])
+def test_secondary_rollback_failure_preserves_primary_and_bytes(
+    store, monkeypatch, rollback_step, primary
+):
+    from pdcst import repository
+
+    repo, episode, _, calls = store
+    target = repo.base_dir / "same.mp3"
+    episode.audio_file = target.name
+    repo.add(episode)
+    target.write_bytes(b"previous audio")
+    unrelated = repo.base_dir / "unrelated.mp3"
+    unrelated.write_bytes(b"unrelated")
+    before = repo.path.read_bytes()
+    original_replace = repository.os.replace
+    injected = []
+    initiating = primary("synthetic metadata failure")
+
+    def fail_write(self, models):
+        injected.append("metadata")
+        raise initiating
+
+    def fail_rollback(source, destination):
+        source, destination = Path(source), Path(destination)
+        completed_move = (
+            source == target
+            and destination.name.startswith(".pdcst-download-")
+            and not destination.name.endswith(".previous")
+        )
+        previous_move = source.name.endswith(".previous") and destination == target
+        if (rollback_step == "completed" and completed_move) or (
+            rollback_step == "previous" and previous_move
+        ):
+            injected.append(rollback_step)
+            raise OSError("private rollback failure")
+        return original_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(EpisodeRepository, "_write_models", fail_write)
+        patch.setattr(repository.os, "replace", fail_rollback)
+        with pytest.warns(RuntimeWarning, match="rollback incomplete") as recorded:
+            with pytest.raises(primary) as error:
+                pdcst.download("show", "first")
+    assert error.value is initiating
+    assert injected == ["metadata", rollback_step]
+    assert repo.path.read_bytes() == before
+    assert unrelated.read_bytes() == b"unrelated"
+    (backup,) = repo.base_dir.glob("*.previous")
+    assert backup.read_bytes() == b"previous audio"
+    if rollback_step == "completed":
+        completed = target
+    else:
+        (completed,) = (
+            p for p in repo.base_dir.glob(".pdcst-download-*") if p != backup
+        )
+        assert not target.exists()
+    assert completed.read_bytes() == b"synthetic audio"
+    diagnostic = str(recorded[0].message)
+    assert str(completed) in diagnostic
+    assert str(backup) in diagnostic
+    assert "private rollback failure" not in diagnostic
+    # Move the completed target aside as instructed before retrying. Reserved
+    # recovery files must never be adopted, overwritten or retired by a retry.
+    if completed == target:
+        recovery = repo.base_dir / ".pdcst-download-manual"
+        completed.rename(recovery)
+        completed = recovery
+    pdcst.download("show", "first")
+    assert len(calls) == 2
+    assert backup.read_bytes() == b"previous audio"
+    assert completed.read_bytes() == b"synthetic audio"
