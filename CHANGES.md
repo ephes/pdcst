@@ -1,5 +1,10 @@
 # Unreleased
 
+* Close the temporary descriptor when stream creation fails; cover atomic storage
+  publication and cleanup with binary/text fault and interruption tests.
+* Drop unusable refresh audio associations, including symlinks, loops, reserved
+  names and conflicting filename/file ownership, while retaining all audio bytes.
+
 * Require unique download title selections, prefer unique exact titles, and reject
   empty or ambiguous identifiers before any transfer or metadata write.
 * Enforce the 16 MiB read ceiling on encoded metadata writes; preflight

@@ -41,7 +41,8 @@ def test_refresh_preserves_valid_download(tmp_path, monkeypatch, podcast, episod
 
 
 @pytest.mark.parametrize(
-    "name", ["missing.mp3", "../outside.mp3", "/outside.mp3", "link.mp3"]
+    "name",
+    ["missing.mp3", "../outside.mp3", "/outside.mp3", "link.mp3", "episodes.json"],
 )
 def test_import_drops_invalid_association(tmp_path, episode, name):
     (tmp_path / "link.mp3").symlink_to(tmp_path.parent / "outside.mp3")
@@ -237,3 +238,91 @@ def test_subscription_publish_failure_is_retryable(
     pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
     assert repo.list()[0].episodes_count == 2
     assert EpisodeRepository(directory).list()[0].audio_file == "saved.mp3"
+
+
+@pytest.mark.parametrize("link", ["internal", "loop"])
+def test_refresh_drops_symlink_but_keeps_real_owner(tmp_path, episode, link):
+    repo = EpisodeRepository(tmp_path)
+    target = tmp_path / "real.mp3"
+    target.write_bytes(b"synthetic audio")
+    alias = tmp_path / "alias.mp3"
+    alias.symlink_to(target if link == "internal" else alias)
+    owner = copy.deepcopy(episode)
+    owner.audio_file = target.name
+    linked = copy.deepcopy(episode)
+    linked.guid = "linked"
+    linked.audio_file = alias.name
+    repo.add_list([owner, linked])
+    incoming = [copy.deepcopy(owner), copy.deepcopy(linked)]
+    for row in incoming:
+        row.audio_file = None
+    repo.import_list(incoming)
+    saved = repo.all
+    assert saved[owner.guid].audio_file == target.name
+    assert saved[linked.guid].audio_file is None
+    assert target.read_bytes() == b"synthetic audio"
+    assert alias.is_symlink()
+
+
+@pytest.mark.parametrize("refresh_both", [False, True])
+def test_refresh_drops_shared_audio_ownership(tmp_path, episode, refresh_both):
+    repo = EpisodeRepository(tmp_path)
+    target = tmp_path / "shared.mp3"
+    target.write_bytes(b"synthetic audio")
+    episode.audio_file = target.name
+    other = copy.deepcopy(episode)
+    other.guid = "other"
+    repo.add_list([episode, other])
+    incoming = [episode, other] if refresh_both else [episode]
+    repo.import_list(incoming)
+    saved = repo.all
+    assert saved[episode.guid].audio_file is None
+    assert saved[other.guid].audio_file == (None if refresh_both else target.name)
+    assert target.read_bytes() == b"synthetic audio"
+
+
+@pytest.mark.parametrize("alias_kind", ["filename", "unicode", "inode"])
+def test_refresh_drops_file_aliases_on_every_host(
+    tmp_path, monkeypatch, episode, alias_kind
+):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    first = tmp_path / ("café.mp3" if alias_kind == "unicode" else "saved.mp3")
+    # Emulate case-insensitive lookup or hard-link identity without relying on
+    # host filename comparison or hard-link support.
+    second = (
+        tmp_path
+        / {"filename": "SAVED.MP3", "unicode": "cafe\u0301.mp3", "inode": "alias.mp3"}[
+            alias_kind
+        ]
+    )
+    first.write_bytes(b"synthetic audio")
+    if alias_kind == "inode":
+        second.write_bytes(b"other synthetic audio")
+    info = first.stat()
+    original_stat = Path.stat
+
+    def alias_stat(path, *args, **kwargs):
+        if path == first or path == second:
+            return SimpleNamespace(
+                st_mode=info.st_mode,
+                st_dev=info.st_dev,
+                st_ino=info.st_ino
+                if alias_kind == "inode" or path == first
+                else info.st_ino + 1,
+            )
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", alias_stat)
+    episode.audio_file = first.name
+    other = copy.deepcopy(episode)
+    other.guid = "other"
+    other.audio_file = second.name
+    repo = EpisodeRepository(tmp_path)
+    repo.add_list([episode, other])
+    repo.import_list([episode, other])
+    assert all(row.audio_file is None for row in repo.all.values())
+    assert first.read_bytes() == b"synthetic audio"
+    if alias_kind == "inode":
+        assert second.read_bytes() == b"other synthetic audio"

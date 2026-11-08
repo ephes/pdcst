@@ -11,6 +11,7 @@ import stat
 import time
 import unicodedata
 import warnings
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -368,35 +369,59 @@ class EpisodeRepository(JsonRepository):
                 if not completed:
                     stage.unlink(missing_ok=True)
 
-    def import_list(self, models):
-        """Refresh feed metadata while retaining usable local download state."""
+    def _usable_audio_files(self, locked):
+        """Retain only regular, non-symlink files with one unambiguous owner."""
         from . import contained_path
 
+        candidates = {}
+        names = Counter()
+        files = Counter()
+        reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
+        for row in locked.values():
+            name = row.audio_file
+            if not name:
+                continue
+            key = unicodedata.normalize("NFC", name).casefold()
+            if (
+                Path(name).name != name
+                or "\\" in name
+                or key in reserved
+                or key.startswith(".pdcst-download-")
+            ):
+                continue
+            try:
+                if (self.base_dir / name).is_symlink():
+                    continue
+                path = contained_path(self.base_dir, name)
+                info = path.stat()
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+            except (ValueError, RuntimeError, OSError):
+                continue
+            identity = (info.st_dev, info.st_ino)
+            candidates[row.pk] = (name, key, identity)
+            names[key] += 1
+            files[identity] += 1
+        return {
+            guid: name
+            for guid, (name, key, identity) in candidates.items()
+            if names[key] == 1 and files[identity] == 1
+        }
+
+    def import_list(self, models):
+        """Refresh feed metadata while retaining usable local download state."""
         incoming = index_unique(
             [self.storage_model_type(**model.dict()) for model in models],
             lambda model: model.pk,
         )
         with self._lock():
             locked = self._fetch_all()
+            usable = self._usable_audio_files(locked)
             for model in incoming.values():
                 previous = locked.get(model.pk)
                 model.audio_file = None
-                if (
-                    previous
-                    and previous.audio_file
-                    and previous.audio_url == model.audio_url
-                ):
-                    name = previous.audio_file
-                    try:
-                        path = contained_path(self.base_dir, name)
-                        if (
-                            Path(name).name == name
-                            and "\\" not in name
-                            and path.is_file()
-                        ):
-                            model.audio_file = name
-                    except ValueError:
-                        pass
+                if previous and previous.audio_url == model.audio_url:
+                    model.audio_file = usable.get(model.pk)
                 locked[model.pk] = model
             self._write_models(locked)
 

@@ -84,7 +84,12 @@ preserves existing JSON and audio.
 
 Repeated subscriptions refresh feed metadata and keep existing download associations
 only when the enclosure URL is unchanged and the stored filename still refers
-to a contained local file. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
+to a contained regular file without a symlink. The association must have unique
+ownership among stored episodes: case/Unicode-equivalent filenames and aliases
+to the same file are refused. A conflicting association is cleared for each
+refreshed episode; unrelated records stay unchanged. Symlink loops, missing files
+and repository/recovery filenames are also unusable. Refresh never deletes linked
+or conflicting audio bytes. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
 titles receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
@@ -185,6 +190,10 @@ editable installs, which skip that check.
 CliRunner in fresh processes, setting `PDCST_HOME` before import. Synthetic
 on-disk stores verify output, repository selection and unchanged stored bytes;
 guards reject feed requests, downloads and repository writes.
+`tests/test_storage.py` directly covers binary/text publication, permission-copy
+and descriptor cleanup with injected stream/OS failures and interruption, using
+synthetic files. It also verifies that a failed exclusive temporary-file creation
+cannot remove a preexisting file.
 `tests/test_cli_storage.py` also exercises fresh-process help/browse/add with a
 missing synthetic home, file-root refusal, private store-read diagnostics and
 filename errors before mutation. Permission failures are injected rather than
@@ -230,6 +239,9 @@ identity are rejected. Replacements preserve existing file permissions; new file
 the process umask. Files are flushed into a sibling temporary file
 and atomically replaced after completion; failures retain the previous file and
 do not mark an episode downloaded. Filesystem errors propagate to the caller.
+The replacement helper closes its descriptor even if opening the stream fails;
+flush, permission-copy, sync, close or rename failures remove only its owned
+temporary file and preserve the destination. Unrelated temporary files remain.
 
 Before transferring audio, downloads claim the destination for the selected episode
 GUID under a per-podcast `episodes.json.download.lock`. Concurrent downloads for
