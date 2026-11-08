@@ -17,6 +17,7 @@ from .repository import (
     FeedParserRepository,
     PodcastRepository,
     StoreReadError,
+    StoreWriteError,
 )
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes"]
@@ -116,6 +117,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
         locked = podcasts_repo._fetch_all()
         stored = podcasts_repo.storage_model_type(**podcast.dict())
         locked[stored.pk] = stored
+        podcasts_repo._serialize_models(locked)
         # Import under the episode lock before publishing its subscription pointer.
         EpisodeRepository(episode_dir).import_list(episodes)
         podcasts_repo._write_models(locked)
@@ -139,24 +141,34 @@ def list_all_episodes(podcast) -> list[Episode]:
     return episodes_repo.list(additional_attributes={"podcast": podcast})
 
 
-def find_podcast_by_identifier(identifier: str) -> Podcast | None:
-    all_podcasts = list_all_podcasts()
-    found = None
-    for podcast in all_podcasts:
-        if identifier.casefold() in podcast.title.casefold():
-            found = podcast
-            break
-    return found
+class SelectionError(ValueError):
+    """A download title does not select one item."""
 
 
-def find_episode_by_identifier(podcast: Podcast, identifier: str) -> Episode | None:
-    episodes = list_all_episodes(podcast)
-    found = None
-    for episode in episodes:
-        if identifier.casefold() in episode.title.casefold():
-            found = episode
-            break
-    return found
+def _find_title(items, identifier, kind, unique):
+    key = identifier.casefold()
+    if unique and not key.strip():
+        raise SelectionError(f"Empty {kind} identifier; use a title")
+    matches = [item for item in items if key in item.title.casefold()]
+    if unique:
+        exact = [item for item in matches if key == item.title.casefold()]
+        matches = exact or matches
+        if len(matches) > 1:
+            raise SelectionError(
+                f"Ambiguous {kind} ({len(matches)} matches); "
+                "use an exact title or a more specific title substring"
+            )
+    return next(iter(matches), None)
+
+
+def find_podcast_by_identifier(identifier: str, *, unique=False) -> Podcast | None:
+    return _find_title(list_all_podcasts(), identifier, "podcast", unique)
+
+
+def find_episode_by_identifier(
+    podcast: Podcast, identifier: str, *, unique=False
+) -> Episode | None:
+    return _find_title(list_all_episodes(podcast), identifier, "episode", unique)
 
 
 @cli.command()
@@ -226,10 +238,10 @@ def download(podcast: str, episode: str):
     pdcst download python htmx
     """
     try:
-        podcast = find_podcast_by_identifier(podcast)
+        podcast = find_podcast_by_identifier(podcast, unique=True)
         if podcast is None:
             raise typer.BadParameter("No matching podcast")
-        episode = find_episode_by_identifier(podcast, episode)
+        episode = find_episode_by_identifier(podcast, episode, unique=True)
         if episode is None:
             raise typer.BadParameter("No matching episode")
         EpisodeRepository(
@@ -243,6 +255,8 @@ def download(podcast: str, episode: str):
         DownloadError,
         FilenamePatternError,
         StoreReadError,
+        StoreWriteError,
+        SelectionError,
     ) as error:
         raise typer.BadParameter(str(error)) from None
 

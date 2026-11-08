@@ -1,5 +1,10 @@
 # Unreleased
 
+* Require unique download title selections, prefer unique exact titles, and reject
+  empty or ambiguous identifiers before any transfer or metadata write.
+* Enforce the 16 MiB read ceiling on encoded metadata writes; preflight
+  subscription size before episode import to preserve associations on refusal.
+
 * Allow help and empty browsing before the data root exists; create it only for
   writing operations and report a configured file root as a concise CLI error.
   Report add's storage-creation/update filesystem failures without raw exceptions.

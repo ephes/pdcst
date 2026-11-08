@@ -39,6 +39,10 @@ class StoreReadError(ValueError):
         super().__init__(f"Cannot read metadata {path}: {category}")
 
 
+class StoreWriteError(ValueError):
+    """Metadata cannot be published within the readable size limit."""
+
+
 def as_utc(value):
     """Legacy naive storage values represent UTC."""
     if value.tzinfo is None:
@@ -217,10 +221,18 @@ class JsonRepository:
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
-    def _write_models(self, locked):
+    def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
-        serialized = models.json()
-        with replacement_file(self.path) as output:
+        serialized = models.json().encode("utf-8")
+        if len(serialized) > STORE_MAX_BYTES:
+            raise StoreWriteError(
+                f"Cannot write metadata {self.path}: size limit exceeded (16 MiB)"
+            )
+        return serialized
+
+    def _write_models(self, locked):
+        serialized = self._serialize_models(locked)
+        with replacement_file(self.path, binary=True) as output:
             output.write(serialized)
 
     def add(self, model):
