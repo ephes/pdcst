@@ -7,7 +7,7 @@ import httpx
 import rich.progress
 
 from .config import settings
-from .storage import replacement_file
+from .storage import PublicationDurabilityError, replacement_file
 
 
 class DownloadError(ValueError):
@@ -18,6 +18,11 @@ def download_with_progress(url, target_path):
     """Transfer audio, reporting transport failures without private URL values."""
     try:
         return _download_with_progress(url, target_path)
+    except PublicationDurabilityError:
+        # The target is an internal stage; publication has not happened yet.
+        raise DownloadError(
+            "Unable to stage audio download: directory sync failed"
+        ) from None
     except httpx.HTTPStatusError as error:
         raise DownloadError(
             f"Audio download failed (HTTP {error.response.status_code})"
@@ -68,6 +73,8 @@ def _download_with_progress(url, target_path):
                         completed += len(chunk)
                         progress.update(task, completed=completed)
                 check_deadline()
+                if completed == 0:
+                    raise DownloadError("Empty audio response")
                 if total is not None and completed != total:
                     raise DownloadError("Incomplete media response")
     return target_path

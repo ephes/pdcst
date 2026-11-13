@@ -26,7 +26,7 @@ import httpx
 from pydantic import BaseModel, ValidationError, parse_obj_as, validator
 
 from .models import Episode, Podcast
-from .storage import replacement_file
+from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
 STORE_MAX_BYTES = 16 * 1024**2
 
@@ -41,7 +41,36 @@ class StoreReadError(ValueError):
 
 
 class StoreWriteError(ValueError):
-    """Metadata cannot be published within the readable size limit."""
+    """Metadata cannot be safely written or its advisory lock admitted."""
+
+
+@contextmanager
+def advisory_lock(path):
+    """Lock an admitted regular inode without following links or blocking on FIFOs."""
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(
+                path, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW, 0o666
+            )
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("not a regular lock file")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            named = path.lstat()
+            if not stat.S_ISREG(named.st_mode) or (info.st_dev, info.st_ino) != (
+                named.st_dev,
+                named.st_ino,
+            ):
+                raise OSError("lock identity changed")
+        except OSError:
+            raise StoreWriteError(
+                f"Cannot acquire lock {path}: regular stable file required"
+            ) from None
+        yield
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def as_utc(value):
@@ -155,14 +184,12 @@ class JsonRepository:
     def path(self):
         return self.base_dir / self.name
 
-    def _fetch_all(self):
-        """
-        Fetch dict of pydantic models from json in self.path
-        """
+    def _read_bytes(self):
+        """Read one bounded regular-file generation, or None for a missing store."""
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         except FileNotFoundError:
-            return {}
+            return None
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         try:
@@ -177,6 +204,12 @@ class JsonRepository:
                     raise StoreReadError(self.path, "size limit exceeded (16 MiB)")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
+        return data
+
+    def _fetch_all(self):
+        data = self._read_bytes()
+        if data is None:
+            return {}
         try:
             decoded = data.decode("utf-8")
         except UnicodeError:
@@ -215,12 +248,8 @@ class JsonRepository:
     @contextmanager
     def _lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.with_suffix(self.path.suffix + ".lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with advisory_lock(self.path.with_suffix(self.path.suffix + ".lock")):
+            yield
 
     def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
@@ -264,7 +293,7 @@ class EpisodeRepository(JsonRepository):
 
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
         if name.casefold() in reserved or name.casefold().startswith(
-            ".pdcst-download-"
+            (".pdcst-download-", ".pdcst-refresh-")
         ):
             raise DownloadConflict(
                 "Episode filename is reserved for repository storage"
@@ -314,8 +343,7 @@ class EpisodeRepository(JsonRepository):
         """Claim audio, transfer outside the JSON lock, then commit only its link."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         claim = self.path.with_suffix(self.path.suffix + ".download.lock")
-        with claim.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with advisory_lock(claim):
             # Closing the descriptor releases the claim even when transfer fails.
             with self._lock():
                 self._download_record(
@@ -349,8 +377,18 @@ class EpisodeRepository(JsonRepository):
                             previous_moved = True
                         os.replace(stage, target)
                         published = True
+                        sync_directory(self.base_dir)
                         current.audio_file = name
                         self._write_models(locked)
+                    except PublicationDurabilityError:
+                        # JSON is already visible: keep its matching audio and backup.
+                        if backup is not None:
+                            warnings.warn(
+                                f"Publication durability uncertain; previous audio retained at {backup}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                        raise
                     except BaseException:
                         # Never overwrite completed bytes if moving them aside fails.
                         if published:
@@ -365,15 +403,21 @@ class EpisodeRepository(JsonRepository):
                                 os.replace(backup, target)
                             except BaseException:
                                 rollback_failed = True
+                        try:
+                            sync_directory(self.base_dir)
+                        except OSError:
+                            rollback_failed = True
                         raise
                     else:
                         if backup is not None:
                             try:
                                 backup.unlink()
+                                sync_directory(self.base_dir)
                             except OSError:
                                 warnings.warn(
-                                    "Download completed; cleanup could not remove "
-                                    f"previous audio retained at {backup}",
+                                    "Download completed; cleanup could not remove or "
+                                    "durably retire previous audio backup at "
+                                    f"{backup}; inspect before removing manually",
                                     RuntimeWarning,
                                     stacklevel=2,
                                 )
@@ -382,7 +426,7 @@ class EpisodeRepository(JsonRepository):
                 if rollback_failed:
                     recovery = target if published else stage
                     previous = (
-                        f"; previous audio retained at {backup}"
+                        f"; previous audio at {backup} or {target}"
                         if previous_moved
                         else ""
                     )
@@ -420,7 +464,7 @@ class EpisodeRepository(JsonRepository):
                 Path(name).name != name
                 or "\\" in name
                 or key in reserved
-                or key.startswith(".pdcst-download-")
+                or key.startswith((".pdcst-download-", ".pdcst-refresh-"))
             ):
                 continue
             try:
@@ -442,22 +486,102 @@ class EpisodeRepository(JsonRepository):
             if names[key] == 1 and files[identity] == 1
         }
 
-    def import_list(self, models):
-        """Refresh feed metadata while retaining usable local download state."""
+    def _import_locked(self, models, locked):
         incoming = index_unique(
             [self.storage_model_type(**model.dict()) for model in models],
             lambda model: model.pk,
         )
+        usable = self._usable_audio_files(locked)
+        for model in incoming.values():
+            previous = locked.get(model.pk)
+            model.audio_file = None
+            if previous and previous.audio_url == model.audio_url:
+                model.audio_file = usable.get(model.pk)
+            locked[model.pk] = model
+        self._write_models(locked)
+
+    def import_list(self, models):
+        """Refresh feed metadata while retaining usable local download state."""
+        with self._lock():
+            self._import_locked(models, self._fetch_all())
+
+    @contextmanager
+    def subscription_import(self, models):
+        """Keep the episode generation owned until subscription publication settles."""
         with self._lock():
             locked = self._fetch_all()
-            usable = self._usable_audio_files(locked)
-            for model in incoming.values():
-                previous = locked.get(model.pk)
-                model.audio_file = None
-                if previous and previous.audio_url == model.audio_url:
-                    model.audio_file = usable.get(model.pk)
-                locked[model.pk] = model
-            self._write_models(locked)
+            previous = self._read_bytes()
+            backup = self.base_dir / f".pdcst-refresh-{uuid4().hex}.previous"
+            recovery = self.base_dir / f".pdcst-refresh-{uuid4().hex}.refreshed"
+            retain = False
+            imported = False
+            try:
+                if previous is not None:
+                    self._write_refresh_backup(backup, previous)
+                self._import_locked(models, locked)
+                imported = True
+                yield
+            except BaseException as error:
+                episodes_unsynced = isinstance(error, PublicationDurabilityError)
+                if episodes_unsynced:
+                    if error.path != self.path:
+                        # The subscription is visible too; retain the matching pair.
+                        raise
+                    imported = True
+                if imported:
+                    try:
+                        # Retain the new generation before attempting compensation.
+                        os.link(self.path, recovery)
+                        sync_directory(self.base_dir)
+                        if previous is None:
+                            self.path.unlink()
+                        else:
+                            os.replace(backup, self.path)
+                        sync_directory(self.base_dir)
+                    except BaseException:
+                        retain = True
+                        warnings.warn(
+                            "Refresh rollback incomplete; "
+                            f"previous metadata at {backup} or {self.path}; "
+                            f"refreshed metadata at {self.path} or {recovery}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                    else:
+                        if episodes_unsynced:
+                            # Nothing refreshed remains visible: do not report it.
+                            raise StoreWriteError(
+                                f"Refresh of {self.path} could not be synced and "
+                                "was rolled back; previous episodes retained"
+                            ) from error
+                raise
+            finally:
+                if not retain:
+                    backup.unlink(missing_ok=True)
+                    recovery.unlink(missing_ok=True)
+
+    def _write_refresh_backup(self, backup, previous):
+        """Write the private rollback copy with the original episode file mode.
+
+        The backup is internal: no directory sync is reported for it, since the
+        compensation path syncs the directory before relying on it.
+        """
+        try:
+            mode = stat.S_IMODE(self.path.stat().st_mode)
+        except FileNotFoundError:
+            mode = None
+        descriptor = os.open(
+            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as output:
+                output.write(previous)
+                output.flush()
+                if mode is not None:
+                    os.fchmod(output.fileno(), mode)
+                os.fsync(output.fileno())
+        finally:
+            os.close(descriptor)
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb
@@ -476,12 +600,8 @@ class PodcastRepository(JsonRepository):
         directory = self.base_dir / ".feed-locks"
         directory.mkdir(parents=True, exist_ok=True)
         name = sha256(url.encode("utf-8")).hexdigest() + ".lock"
-        with (directory / name).open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with advisory_lock(directory / name):
+            yield
 
     def list(self, additional_attributes=None):
         from . import contained_path

@@ -26,10 +26,11 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
     original_stat = Path.stat
     original_replace = storage.os.replace
 
-    def open_file(path, flags, mode):
-        requested_modes.append(mode)
+    def open_file(path, flags, mode=0o777):
         descriptor = original_open(path, flags, mode)
-        opened.append(descriptor)
+        if not flags & storage.os.O_DIRECTORY:
+            requested_modes.append(mode)
+            opened.append(descriptor)
         return descriptor
 
     def target_stat(path, *args, **kwargs):

@@ -92,6 +92,7 @@ and repository/recovery filenames are also unusable. Refresh never deletes linke
 or conflicting audio bytes. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
 titles receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
+Directory ownership uses NFC Unicode normalization and case folding on every host.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
 feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio
 files stay in their old directory; download associations are not migrated to the
@@ -234,14 +235,25 @@ or fragment values, or transport exception chains. HTTP failures include only
 their status code. Transfer failures preserve previous audio and download metadata,
 and remove only this download's temporary file.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
-must match the received bytes. Responses with a content encoding other than
-identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
+must match the received bytes. A response must contain at least one body byte;
+empty success responses raise `DownloadError` and preserve previous audio and
+metadata, including zero-length and empty chunked responses. A directory-sync
+failure while staging the transfer is reported as an ordinary download failure
+(`DownloadError`); the stage is removed and nothing is published. This is a transfer
+completeness check, not an audio codec validation. Responses with a content
+encoding other than identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
 the process umask. Files are flushed into a sibling temporary file
-and atomically replaced after completion; failures retain the previous file and
-do not mark an episode downloaded. Filesystem errors propagate to the caller.
+and atomically replaced after completion. The containing directory is then synced
+before success. Failures before replacement retain the previous file and do not
+mark an episode downloaded. Filesystem errors propagate to the caller.
 The replacement helper closes its descriptor even if opening the stream fails;
-flush, permission-copy, sync, close or rename failures remove only its owned
-temporary file and preserve the destination. Unrelated temporary files remain.
+flush, permission-copy, file-sync, close or rename failures remove only its owned
+temporary file and preserve the destination. A directory-sync failure or interruption after a
+successful replacement raises `pdcst.storage.PublicationDurabilityError`
+(`OSError`): the new
+file is already visible, but its durability across power loss is uncertain.
+The CLI reports that state without raw filesystem exception details. Unrelated
+temporary files remain.
 
 Before transferring audio, downloads claim the destination for the selected episode
 GUID under a per-podcast `episodes.json.download.lock`. Concurrent downloads for
@@ -281,24 +293,38 @@ and restore previous audio from the reported `.previous` backup if needed.
 Retries never adopt or remove reserved recovery files. A process crash can also
 require manual recovery.
 
-Once audio and JSON have both been published, failure to remove the previous
-backup is a cleanup warning: the download succeeds, and `download_episode`
-returns the completed destination path. The warning names the retained
-`.pdcst-download-*.previous` file without filesystem exception details. That
+Audio directory entries are synced before JSON publication; JSON replacement
+also syncs its parent before the previous audio backup may be retired. If JSON
+is visible but its directory sync fails, matching new audio and metadata stay
+together, the previous audio backup is retained, and the command reports uncertain
+durability. Inspect these files before retrying; this is not a rollback or a
+crash-atomic transaction. A failure before JSON replacement restores prior audio.
+
+Once audio and JSON have both been published and synced, failure to remove or
+sync the retirement of the previous backup is a cleanup warning: the download
+succeeds, and `download_episode` returns the completed destination path. The warning names the
+`.pdcst-download-*.previous` path (it may already be absent if only retirement
+sync failed) without filesystem exception details. That
 backup may be removed manually after checking the new audio and metadata; no
 repeat transfer is needed.
 
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
-serialize cooperating writers across reload and atomic replacement. Do not
-remove either kind of lock file while commands are running. Failed serialization
-or writes leave the previous JSON intact; leftover temporary files after a killed process
+serialize cooperating writers across reload and atomic replacement. Metadata,
+download and feed lock descriptors must be regular files, opened
+without following symlinks and without blocking on special files. Their named
+inode is checked again after acquisition. Invalid locks raise a bounded
+`StoreWriteError`; move an invalid lock aside only when no commands are running.
+Do not remove any lock file while commands are running. Failed serialization
+or writes before replacement leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. Metadata reads require a regular
 UTF-8 JSON file of at most 16 MiB (including
 files that grow during the read). Writes enforce the same encoded byte ceiling
 before replacement; oversized batches raise `StoreWriteError` (`ValueError`)
 and preserve the previous JSON and audio associations. Subscription refresh
 checks its subscription batch before importing episode metadata.
-Missing stores remain empty. Nonregular files,
+Missing stores remain empty. Metadata symlinks (including dangling links) are
+refused without reading or modifying their targets. Move the link aside and
+restore a regular JSON file at the named path before retrying. Nonregular files,
 oversize input, malformed JSON/schema and filesystem failures raise
 `StoreReadError` (`ValueError`) with the path and a trusted category, never stored
 record values. Every CLI command reports these failures concisely with a nonzero
@@ -310,8 +336,20 @@ each subscription listing uses one snapshot for metadata and legacy directories.
 Subscription refresh holds the podcast lock while importing episodes under their
 own lock, then publishes the subscription record last. Corrupt episode JSON or
 an episode read/write failure leaves subscription bytes, directory pointers and
-counts unchanged. If subscription publication fails, imported episode metadata
-may already be updated; retrying preserves valid download associations. This is
+counts unchanged. If subscription publication fails, the previous episode
+generation (including download links) is restored while both metadata locks remain held.
+The private rollback copy keeps the original `episodes.json` permissions. If the
+refreshed `episodes.json` is replaced but its directory sync fails, the refresh is
+rolled back the same way and reported as a failed write (`StoreWriteError`), not
+as a publication with uncertain durability. If restoration
+also fails, the original error is preserved and a warning names retained
+`.pdcst-refresh-*.previous` and `.refreshed` generations for manual recovery.
+Do not remove these files before checking both repositories; restore the previous
+episode generation before retrying. Names beginning `.pdcst-refresh-` are reserved
+for recovery metadata and cannot be downloaded or retained as audio associations.
+A subscription replacement whose final
+directory sync fails is already visible: its matching refreshed episodes stay
+in place and the error reports uncertain durability. This is
 an ordered two-file update, not a crash-atomic transaction. New directories and
 stable lock files may remain after a failed import.
 

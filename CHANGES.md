@@ -1,5 +1,24 @@
 # Unreleased
 
+* Sync parent directories after replacement and before retiring previous audio;
+  report post-replacement sync failures as uncertain durability while keeping
+  visible audio/metadata coherent and retaining previous audio for inspection.
+* Reject empty successful audio responses before publication, preserving prior
+  files and download links.
+
+* Refuse metadata symlinks without touching their targets. Admit only regular,
+  stable no-follow descriptors for metadata, download and feed advisory locks;
+  cover FIFO/link refusal and actual two-process serialization.
+
+* Restore the previous episode generation if subscription publication fails;
+  retain recovery generations when compensation also fails. A refresh whose
+  episode directory sync fails but is fully rolled back reports a rolled-back
+  write failure instead of a publication; the restored file keeps its original
+  permissions, and a failed rollback-copy write leaves no recovery file.
+* Report a directory-sync failure of the internal download stage as an ordinary
+  download failure; nothing is published or reported as published.
+* Refuse NFC/case-equivalent cross-feed directory ownership on every host.
+
 * Keep successful downloads successful when previous-backup retirement fails;
   report the retained backup with a bounded cleanup warning.
 * Preserve the initiating publication error when audio rollback also fails;

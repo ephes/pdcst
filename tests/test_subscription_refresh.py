@@ -192,8 +192,9 @@ def test_episode_import_failure_keeps_subscription(
     assert not list(tmp_path.rglob("*.tmp"))
 
 
+@pytest.mark.parametrize("changed_enclosure", [False, True])
 def test_subscription_publish_failure_is_retryable(
-    tmp_path, monkeypatch, podcast, episode
+    tmp_path, monkeypatch, podcast, episode, changed_enclosure
 ):
     from pdcst.storage import os
 
@@ -212,6 +213,9 @@ def test_subscription_publish_failure_is_retryable(
     incoming = copy.deepcopy(episode)
     incoming.audio_file = None
     incoming.title = "Updated"
+    if changed_enclosure:
+        incoming.audio_url = "https://example.test/revised.mp3"
+    episode_before = episodes.path.read_bytes()
 
     class Parser:
         def get(self, *_):
@@ -233,11 +237,15 @@ def test_subscription_publish_failure_is_retryable(
     assert injected == [True]
     assert repo.path.read_bytes() == before
     imported = EpisodeRepository(directory).list()[0]
-    assert imported.title == "Updated"
+    assert imported.title == episode.title
+    assert episodes.path.read_bytes() == episode_before
+    assert (directory / "saved.mp3").read_bytes() == b"synthetic"
     assert imported.audio_file == "saved.mp3"
     pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
     assert repo.list()[0].episodes_count == 2
-    assert EpisodeRepository(directory).list()[0].audio_file == "saved.mp3"
+    assert EpisodeRepository(directory).list()[0].audio_file == (
+        None if changed_enclosure else "saved.mp3"
+    )
 
 
 @pytest.mark.parametrize("link", ["internal", "loop"])
@@ -326,3 +334,156 @@ def test_refresh_drops_file_aliases_on_every_host(
     assert first.read_bytes() == b"synthetic audio"
     if alias_kind == "inode":
         assert second.read_bytes() == b"other synthetic audio"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_unicode_directory_owners_refused_before_import(
+    tmp_path, monkeypatch, podcast, explicit
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    repo = PodcastRepository(tmp_path)
+    podcast.directory = "café"
+    other = copy.deepcopy(podcast)
+    other.feed.url = "https://example.test/other"
+    other.directory = "cafe\u0301"
+    repo.add_list([podcast, other])
+    before = repo.path.read_bytes()
+
+    class Parser:
+        def get(self, *_):
+            return other, []
+
+    with pytest.raises(ValueError, match="already used"):
+        pdcst.subscribe(
+            other.feed.url,
+            "{title}",
+            other.directory if explicit else None,
+            Parser(),
+            repo,
+        )
+    assert repo.path.read_bytes() == before
+    assert not list(tmp_path.rglob("episodes.json"))
+
+
+def test_refresh_compensation_failure_retains_both_generations(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst.storage import os
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    repo = PodcastRepository(tmp_path)
+    repo.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episodes.add(episode)
+    before = episodes.path.read_bytes()
+    fresh = copy.deepcopy(episode)
+    fresh.title = "Refreshed title"
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [fresh]
+
+    replace = os.replace
+    publications = []
+
+    def fail(source, target):
+        if target == repo.path:
+            raise OSError("subscription failed")
+        if target == episodes.path:
+            publications.append(True)
+            if len(publications) == 2:
+                raise OSError("compensation failed")
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.warns(RuntimeWarning, match="Refresh rollback incomplete"):
+        with pytest.raises(OSError, match="subscription failed"):
+            pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
+    assert episodes.path.read_bytes() != before
+    retained = list(episodes.base_dir.glob(".pdcst-refresh-*"))
+    assert any(p.read_bytes() == before for p in retained)
+    assert any(b"Refreshed title" in p.read_bytes() for p in retained)
+
+
+@pytest.mark.parametrize("existing_episodes", [False, True])
+def test_compensation_holds_episode_lock_against_second_process(
+    tmp_path, monkeypatch, podcast, episode, existing_episodes
+):
+    import os
+    import select
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcasts = PodcastRepository(tmp_path)
+    podcasts.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    if existing_episodes:
+        episodes.add(episode)
+    incoming = copy.deepcopy(episode)
+    incoming.title = "Unpublished refresh"
+    concurrent = episodes.storage_model_type(**episode.dict())
+    concurrent.guid = "concurrent writer"
+    child = None
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [incoming]
+
+    def fail_publication(_models):
+        nonlocal child
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                """
+import sys
+from pdcst.repository import EpisodeRepository, EpisodeInDb
+print("started", flush=True)
+EpisodeRepository(sys.argv[1]).add(EpisodeInDb.parse_raw(sys.argv[2]))
+print("finished", flush=True)
+""",
+                str(episodes.base_dir),
+                concurrent.json(),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=dict(os.environ, PYTHONPATH=str(Path(pdcst.__file__).parent.parent)),
+        )
+        assert select.select([child.stdout], [], [], 5)[0]
+        assert child.stdout.readline().strip() == "started"
+        assert not select.select([child.stdout], [], [], 0.3)[0]
+        raise OSError("subscription publication failed")
+
+    monkeypatch.setattr(podcasts, "_write_models", fail_publication)
+    try:
+        with pytest.raises(OSError, match="subscription publication failed"):
+            pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
+        out, err = child.communicate(timeout=5)
+        assert child.returncode == 0, err
+        assert out.strip() == "finished"
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.communicate()
+    saved = episodes.all
+    assert saved[concurrent.guid].title == concurrent.title
+    if existing_episodes:
+        assert saved[episode.guid].title == episode.title
+    else:
+        assert episode.guid not in saved
+    assert not list(episodes.base_dir.glob(".pdcst-refresh-*"))
+
+
+@pytest.mark.parametrize("suffix", ["previous", "refreshed"])
+def test_refresh_recovery_metadata_never_becomes_audio(tmp_path, episode, suffix):
+    repo = EpisodeRepository(tmp_path)
+    episode.audio_file = f".pdcst-refresh-retained.{suffix}"
+    recovery = tmp_path / episode.audio_file
+    recovery.write_bytes(b"retained metadata generation")
+    repo.add(episode)
+    repo.import_list([episode])
+    assert repo.list()[0].audio_file is None
+    assert recovery.read_bytes() == b"retained metadata generation"
