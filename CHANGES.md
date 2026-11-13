@@ -11,7 +11,12 @@
   cover FIFO/link refusal and actual two-process serialization.
 
 * Restore the previous episode generation if subscription publication fails;
-  retain recovery generations when compensation also fails.
+  retain recovery generations when compensation also fails. A refresh whose
+  episode directory sync fails but is fully rolled back reports a rolled-back
+  write failure instead of a publication; the restored file keeps its original
+  permissions, and a failed rollback-copy write leaves no recovery file.
+* Report a directory-sync failure of the internal download stage as an ordinary
+  download failure; nothing is published or reported as published.
 * Refuse NFC/case-equivalent cross-feed directory ownership on every host.
 
 * Keep successful downloads successful when previous-backup retirement fails;

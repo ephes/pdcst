@@ -237,7 +237,9 @@ and remove only this download's temporary file.
 Missing or invalid Content-Length uses indeterminate progress. A valid length
 must match the received bytes. A response must contain at least one body byte;
 empty success responses raise `DownloadError` and preserve previous audio and
-metadata, including zero-length and empty chunked responses. This is a transfer
+metadata, including zero-length and empty chunked responses. A directory-sync
+failure while staging the transfer is reported as an ordinary download failure
+(`DownloadError`); the stage is removed and nothing is published. This is a transfer
 completeness check, not an audio codec validation. Responses with a content
 encoding other than identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
 the process umask. Files are flushed into a sibling temporary file
@@ -335,7 +337,11 @@ Subscription refresh holds the podcast lock while importing episodes under their
 own lock, then publishes the subscription record last. Corrupt episode JSON or
 an episode read/write failure leaves subscription bytes, directory pointers and
 counts unchanged. If subscription publication fails, the previous episode
-generation (including download links) is restored while both metadata locks remain held. If restoration
+generation (including download links) is restored while both metadata locks remain held.
+The private rollback copy keeps the original `episodes.json` permissions. If the
+refreshed `episodes.json` is replaced but its directory sync fails, the refresh is
+rolled back the same way and reported as a failed write (`StoreWriteError`), not
+as a publication with uncertain durability. If restoration
 also fails, the original error is preserved and a warning names retained
 `.pdcst-refresh-*.previous` and `.refreshed` generations for manual recovery.
 Do not remove these files before checking both repositories; restore the previous

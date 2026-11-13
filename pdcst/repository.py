@@ -513,17 +513,17 @@ class EpisodeRepository(JsonRepository):
             previous = self._read_bytes()
             backup = self.base_dir / f".pdcst-refresh-{uuid4().hex}.previous"
             recovery = self.base_dir / f".pdcst-refresh-{uuid4().hex}.refreshed"
-            if previous is not None:
-                with replacement_file(backup, binary=True) as output:
-                    output.write(previous)
             retain = False
             imported = False
             try:
+                if previous is not None:
+                    self._write_refresh_backup(backup, previous)
                 self._import_locked(models, locked)
                 imported = True
                 yield
             except BaseException as error:
-                if isinstance(error, PublicationDurabilityError):
+                episodes_unsynced = isinstance(error, PublicationDurabilityError)
+                if episodes_unsynced:
                     if error.path != self.path:
                         # The subscription is visible too; retain the matching pair.
                         raise
@@ -547,11 +547,41 @@ class EpisodeRepository(JsonRepository):
                             RuntimeWarning,
                             stacklevel=2,
                         )
+                    else:
+                        if episodes_unsynced:
+                            # Nothing refreshed remains visible: do not report it.
+                            raise StoreWriteError(
+                                f"Refresh of {self.path} could not be synced and "
+                                "was rolled back; previous episodes retained"
+                            ) from error
                 raise
             finally:
                 if not retain:
                     backup.unlink(missing_ok=True)
                     recovery.unlink(missing_ok=True)
+
+    def _write_refresh_backup(self, backup, previous):
+        """Write the private rollback copy with the original episode file mode.
+
+        The backup is internal: no directory sync is reported for it, since the
+        compensation path syncs the directory before relying on it.
+        """
+        try:
+            mode = stat.S_IMODE(self.path.stat().st_mode)
+        except FileNotFoundError:
+            mode = None
+        descriptor = os.open(
+            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as output:
+                output.write(previous)
+                output.flush()
+                if mode is not None:
+                    os.fchmod(output.fileno(), mode)
+                os.fsync(output.fileno())
+        finally:
+            os.close(descriptor)
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb
