@@ -1,5 +1,9 @@
 # Unreleased
 
+* Restore the previous episode generation if subscription publication fails;
+  retain recovery generations when compensation also fails.
+* Refuse NFC/case-equivalent cross-feed directory ownership on every host.
+
 * Keep successful downloads successful when previous-backup retirement fails;
   report the retained backup with a bounded cleanup warning.
 * Preserve the initiating publication error when audio rollback also fails;

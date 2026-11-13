@@ -155,14 +155,12 @@ class JsonRepository:
     def path(self):
         return self.base_dir / self.name
 
-    def _fetch_all(self):
-        """
-        Fetch dict of pydantic models from json in self.path
-        """
+    def _read_bytes(self):
+        """Read one bounded regular-file generation, or None for a missing store."""
         try:
             descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
         except FileNotFoundError:
-            return {}
+            return None
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         try:
@@ -177,6 +175,12 @@ class JsonRepository:
                     raise StoreReadError(self.path, "size limit exceeded (16 MiB)")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
+        return data
+
+    def _fetch_all(self):
+        data = self._read_bytes()
+        if data is None:
+            return {}
         try:
             decoded = data.decode("utf-8")
         except UnicodeError:
@@ -442,22 +446,63 @@ class EpisodeRepository(JsonRepository):
             if names[key] == 1 and files[identity] == 1
         }
 
-    def import_list(self, models):
-        """Refresh feed metadata while retaining usable local download state."""
+    def _import_locked(self, models, locked):
         incoming = index_unique(
             [self.storage_model_type(**model.dict()) for model in models],
             lambda model: model.pk,
         )
+        usable = self._usable_audio_files(locked)
+        for model in incoming.values():
+            previous = locked.get(model.pk)
+            model.audio_file = None
+            if previous and previous.audio_url == model.audio_url:
+                model.audio_file = usable.get(model.pk)
+            locked[model.pk] = model
+        self._write_models(locked)
+
+    def import_list(self, models):
+        """Refresh feed metadata while retaining usable local download state."""
+        with self._lock():
+            self._import_locked(models, self._fetch_all())
+
+    @contextmanager
+    def subscription_import(self, models):
+        """Keep the episode generation owned until subscription publication settles."""
         with self._lock():
             locked = self._fetch_all()
-            usable = self._usable_audio_files(locked)
-            for model in incoming.values():
-                previous = locked.get(model.pk)
-                model.audio_file = None
-                if previous and previous.audio_url == model.audio_url:
-                    model.audio_file = usable.get(model.pk)
-                locked[model.pk] = model
-            self._write_models(locked)
+            previous = self._read_bytes()
+            backup = self.base_dir / f".pdcst-refresh-{uuid4().hex}.previous"
+            recovery = self.base_dir / f".pdcst-refresh-{uuid4().hex}.refreshed"
+            if previous is not None:
+                with replacement_file(backup, binary=True) as output:
+                    output.write(previous)
+            retain = False
+            try:
+                self._import_locked(models, locked)
+                try:
+                    yield
+                except BaseException:
+                    try:
+                        # Retain the new generation before attempting compensation.
+                        os.link(self.path, recovery)
+                        if previous is None:
+                            self.path.unlink()
+                        else:
+                            os.replace(backup, self.path)
+                    except BaseException:
+                        retain = True
+                        warnings.warn(
+                            "Refresh rollback incomplete; "
+                            f"previous metadata retained at {backup}; "
+                            f"refreshed metadata at {self.path} or {recovery}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                    raise
+            finally:
+                if not retain:
+                    backup.unlink(missing_ok=True)
+                    recovery.unlink(missing_ok=True)
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb

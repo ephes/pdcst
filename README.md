@@ -92,6 +92,7 @@ and repository/recovery filenames are also unusable. Refresh never deletes linke
 or conflicting audio bytes. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
 titles receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
+Directory ownership uses NFC Unicode normalization and case folding on every host.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
 feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio
 files stay in their old directory; download associations are not migrated to the
@@ -310,8 +311,12 @@ each subscription listing uses one snapshot for metadata and legacy directories.
 Subscription refresh holds the podcast lock while importing episodes under their
 own lock, then publishes the subscription record last. Corrupt episode JSON or
 an episode read/write failure leaves subscription bytes, directory pointers and
-counts unchanged. If subscription publication fails, imported episode metadata
-may already be updated; retrying preserves valid download associations. This is
+counts unchanged. If subscription publication fails, the previous episode generation (including
+download links) is restored while both metadata locks remain held. If restoration
+also fails, the original error is preserved and a warning names retained
+`.pdcst-refresh-*.previous` and `.refreshed` generations for manual recovery.
+Do not remove these files before checking both repositories; restore the previous
+episode generation before retrying. This is
 an ordered two-file update, not a crash-atomic transaction. New directories and
 stable lock files may remain after a failed import.
 

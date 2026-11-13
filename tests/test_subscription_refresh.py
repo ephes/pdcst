@@ -192,8 +192,9 @@ def test_episode_import_failure_keeps_subscription(
     assert not list(tmp_path.rglob("*.tmp"))
 
 
+@pytest.mark.parametrize("changed_enclosure", [False, True])
 def test_subscription_publish_failure_is_retryable(
-    tmp_path, monkeypatch, podcast, episode
+    tmp_path, monkeypatch, podcast, episode, changed_enclosure
 ):
     from pdcst.storage import os
 
@@ -212,6 +213,9 @@ def test_subscription_publish_failure_is_retryable(
     incoming = copy.deepcopy(episode)
     incoming.audio_file = None
     incoming.title = "Updated"
+    if changed_enclosure:
+        incoming.audio_url = "https://example.test/revised.mp3"
+    episode_before = episodes.path.read_bytes()
 
     class Parser:
         def get(self, *_):
@@ -233,11 +237,15 @@ def test_subscription_publish_failure_is_retryable(
     assert injected == [True]
     assert repo.path.read_bytes() == before
     imported = EpisodeRepository(directory).list()[0]
-    assert imported.title == "Updated"
+    assert imported.title == episode.title
+    assert episodes.path.read_bytes() == episode_before
+    assert (directory / "saved.mp3").read_bytes() == b"synthetic"
     assert imported.audio_file == "saved.mp3"
     pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
     assert repo.list()[0].episodes_count == 2
-    assert EpisodeRepository(directory).list()[0].audio_file == "saved.mp3"
+    assert EpisodeRepository(directory).list()[0].audio_file == (
+        None if changed_enclosure else "saved.mp3"
+    )
 
 
 @pytest.mark.parametrize("link", ["internal", "loop"])
@@ -326,3 +334,72 @@ def test_refresh_drops_file_aliases_on_every_host(
     assert first.read_bytes() == b"synthetic audio"
     if alias_kind == "inode":
         assert second.read_bytes() == b"other synthetic audio"
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_unicode_directory_owners_refused_before_import(
+    tmp_path, monkeypatch, podcast, explicit
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    repo = PodcastRepository(tmp_path)
+    podcast.directory = "café"
+    other = copy.deepcopy(podcast)
+    other.feed.url = "https://example.test/other"
+    other.directory = "cafe\u0301"
+    repo.add_list([podcast, other])
+    before = repo.path.read_bytes()
+
+    class Parser:
+        def get(self, *_):
+            return other, []
+
+    with pytest.raises(ValueError, match="already used"):
+        pdcst.subscribe(
+            other.feed.url,
+            "{title}",
+            other.directory if explicit else None,
+            Parser(),
+            repo,
+        )
+    assert repo.path.read_bytes() == before
+    assert not list(tmp_path.rglob("episodes.json"))
+
+
+def test_refresh_compensation_failure_retains_both_generations(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst.storage import os
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    repo = PodcastRepository(tmp_path)
+    repo.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episodes.add(episode)
+    before = episodes.path.read_bytes()
+    fresh = copy.deepcopy(episode)
+    fresh.title = "Refreshed title"
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [fresh]
+
+    replace = os.replace
+    publications = []
+
+    def fail(source, target):
+        if target == repo.path:
+            raise OSError("subscription failed")
+        if target == episodes.path:
+            publications.append(True)
+            if len(publications) == 2:
+                raise OSError("compensation failed")
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.warns(RuntimeWarning, match="Refresh rollback incomplete"):
+        with pytest.raises(OSError, match="subscription failed"):
+            pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
+    assert episodes.path.read_bytes() != before
+    retained = list(episodes.base_dir.glob(".pdcst-refresh-*"))
+    assert any(p.read_bytes() == before for p in retained)
+    assert any(b"Refreshed title" in p.read_bytes() for p in retained)

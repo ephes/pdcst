@@ -3,6 +3,7 @@ pdcst is a little podcast command line utility to show
 new episodes and download audio files.
 """
 
+import unicodedata
 from pathlib import Path, PureWindowsPath
 
 import typer
@@ -85,7 +86,9 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                         podcast.directory = legacy
 
         def owned(directory):
-            candidate = str(contained_path(settings.root, directory)).casefold()
+            candidate = unicodedata.normalize(
+                "NFC", str(contained_path(settings.root, directory))
+            ).casefold()
             for item in subscriptions:
                 if item.feed.url == feed_url:
                     continue
@@ -94,7 +97,10 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                 except ValueError:
                     # Unsafe legacy paths cannot own a contained destination.
                     continue
-                if str(stored_path).casefold() == candidate:
+                if (
+                    unicodedata.normalize("NFC", str(stored_path)).casefold()
+                    == candidate
+                ):
                     return True
             return False
 
@@ -119,8 +125,8 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
         locked[stored.pk] = stored
         podcasts_repo._serialize_models(locked)
         # Import under the episode lock before publishing its subscription pointer.
-        EpisodeRepository(episode_dir).import_list(episodes)
-        podcasts_repo._write_models(locked)
+        with EpisodeRepository(episode_dir).subscription_import(episodes):
+            podcasts_repo._write_models(locked)
     return podcast
 
 
