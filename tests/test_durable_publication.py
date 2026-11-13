@@ -179,7 +179,7 @@ def test_empty_download_never_publishes(
                     200, headers=headers, stream=httpx.ByteStream(b"")
                 )
             ),
-            **kw
+            **kw,
         ),
     )
     with pytest.raises(DownloadError, match="Empty audio response"):
@@ -213,7 +213,7 @@ def test_small_audio_download_publishes_real_bytes(tmp_path, monkeypatch, episod
                     stream=httpx.ByteStream(data),
                 )
             ),
-            **kw
+            **kw,
         ),
     )
     repo = EpisodeRepository(tmp_path)

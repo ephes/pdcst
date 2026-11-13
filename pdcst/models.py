@@ -2,7 +2,6 @@
 All the domain models for pdcst live here.
 """
 
-
 import re
 from pathlib import PureWindowsPath
 from string import Formatter

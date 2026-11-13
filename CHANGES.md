@@ -1,5 +1,10 @@
 # Unreleased
 
+* Repair the pre-commit configuration: Flake8 now comes from its GitHub
+  repository (the GitLab URL is gone), isort moves to the PyCQA repository, and
+  all hooks are bumped to releases that install on current Python. Black's
+  current style is applied to the sources and tests.
+
 * Sync parent directories after replacement and before retiring previous audio;
   report post-replacement sync failures as uncertain durability while keeping
   visible audio/metadata coherent and retaining previous audio for inspection.
