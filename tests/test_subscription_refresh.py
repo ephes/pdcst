@@ -403,3 +403,87 @@ def test_refresh_compensation_failure_retains_both_generations(
     retained = list(episodes.base_dir.glob(".pdcst-refresh-*"))
     assert any(p.read_bytes() == before for p in retained)
     assert any(b"Refreshed title" in p.read_bytes() for p in retained)
+
+
+@pytest.mark.parametrize("existing_episodes", [False, True])
+def test_compensation_holds_episode_lock_against_second_process(
+    tmp_path, monkeypatch, podcast, episode, existing_episodes
+):
+    import os
+    import select
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcasts = PodcastRepository(tmp_path)
+    podcasts.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    if existing_episodes:
+        episodes.add(episode)
+    incoming = copy.deepcopy(episode)
+    incoming.title = "Unpublished refresh"
+    concurrent = episodes.storage_model_type(**episode.dict())
+    concurrent.guid = "concurrent writer"
+    child = None
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [incoming]
+
+    def fail_publication(_models):
+        nonlocal child
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                """
+import sys
+from pdcst.repository import EpisodeRepository, EpisodeInDb
+print("started", flush=True)
+EpisodeRepository(sys.argv[1]).add(EpisodeInDb.parse_raw(sys.argv[2]))
+print("finished", flush=True)
+""",
+                str(episodes.base_dir),
+                concurrent.json(),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=dict(os.environ, PYTHONPATH=str(Path(pdcst.__file__).parent.parent)),
+        )
+        assert select.select([child.stdout], [], [], 5)[0]
+        assert child.stdout.readline().strip() == "started"
+        assert not select.select([child.stdout], [], [], 0.3)[0]
+        raise OSError("subscription publication failed")
+
+    monkeypatch.setattr(podcasts, "_write_models", fail_publication)
+    try:
+        with pytest.raises(OSError, match="subscription publication failed"):
+            pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
+        out, err = child.communicate(timeout=5)
+        assert child.returncode == 0, err
+        assert out.strip() == "finished"
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.communicate()
+    saved = episodes.all
+    assert saved[concurrent.guid].title == concurrent.title
+    if existing_episodes:
+        assert saved[episode.guid].title == episode.title
+    else:
+        assert episode.guid not in saved
+    assert not list(episodes.base_dir.glob(".pdcst-refresh-*"))
+
+
+@pytest.mark.parametrize("suffix", ["previous", "refreshed"])
+def test_refresh_recovery_metadata_never_becomes_audio(tmp_path, episode, suffix):
+    repo = EpisodeRepository(tmp_path)
+    episode.audio_file = f".pdcst-refresh-retained.{suffix}"
+    recovery = tmp_path / episode.audio_file
+    recovery.write_bytes(b"retained metadata generation")
+    repo.add(episode)
+    repo.import_list([episode])
+    assert repo.list()[0].audio_file is None
+    assert recovery.read_bytes() == b"retained metadata generation"

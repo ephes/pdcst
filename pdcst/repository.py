@@ -26,7 +26,7 @@ import httpx
 from pydantic import BaseModel, ValidationError, parse_obj_as, validator
 
 from .models import Episode, Podcast
-from .storage import replacement_file
+from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
 STORE_MAX_BYTES = 16 * 1024**2
 
@@ -41,7 +41,7 @@ class StoreReadError(ValueError):
 
 
 class StoreWriteError(ValueError):
-    """Metadata cannot be published within the readable size limit."""
+    """Metadata cannot be safely written or its advisory lock admitted."""
 
 
 @contextmanager
@@ -293,7 +293,7 @@ class EpisodeRepository(JsonRepository):
 
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
         if name.casefold() in reserved or name.casefold().startswith(
-            ".pdcst-download-"
+            (".pdcst-download-", ".pdcst-refresh-")
         ):
             raise DownloadConflict(
                 "Episode filename is reserved for repository storage"
@@ -377,8 +377,18 @@ class EpisodeRepository(JsonRepository):
                             previous_moved = True
                         os.replace(stage, target)
                         published = True
+                        sync_directory(self.base_dir)
                         current.audio_file = name
                         self._write_models(locked)
+                    except PublicationDurabilityError:
+                        # JSON is already visible: keep its matching audio and backup.
+                        if backup is not None:
+                            warnings.warn(
+                                f"Publication durability uncertain; previous audio retained at {backup}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                        raise
                     except BaseException:
                         # Never overwrite completed bytes if moving them aside fails.
                         if published:
@@ -393,15 +403,21 @@ class EpisodeRepository(JsonRepository):
                                 os.replace(backup, target)
                             except BaseException:
                                 rollback_failed = True
+                        try:
+                            sync_directory(self.base_dir)
+                        except OSError:
+                            rollback_failed = True
                         raise
                     else:
                         if backup is not None:
                             try:
                                 backup.unlink()
+                                sync_directory(self.base_dir)
                             except OSError:
                                 warnings.warn(
-                                    "Download completed; cleanup could not remove "
-                                    f"previous audio retained at {backup}",
+                                    "Download completed; cleanup could not remove or "
+                                    "durably retire previous audio backup at "
+                                    f"{backup}; inspect before removing manually",
                                     RuntimeWarning,
                                     stacklevel=2,
                                 )
@@ -410,7 +426,7 @@ class EpisodeRepository(JsonRepository):
                 if rollback_failed:
                     recovery = target if published else stage
                     previous = (
-                        f"; previous audio retained at {backup}"
+                        f"; previous audio at {backup} or {target}"
                         if previous_moved
                         else ""
                     )
@@ -448,7 +464,7 @@ class EpisodeRepository(JsonRepository):
                 Path(name).name != name
                 or "\\" in name
                 or key in reserved
-                or key.startswith(".pdcst-download-")
+                or key.startswith((".pdcst-download-", ".pdcst-refresh-"))
             ):
                 continue
             try:
@@ -501,28 +517,37 @@ class EpisodeRepository(JsonRepository):
                 with replacement_file(backup, binary=True) as output:
                     output.write(previous)
             retain = False
+            imported = False
             try:
                 self._import_locked(models, locked)
-                try:
-                    yield
-                except BaseException:
+                imported = True
+                yield
+            except BaseException as error:
+                if isinstance(error, PublicationDurabilityError):
+                    if error.path != self.path:
+                        # The subscription is visible too; retain the matching pair.
+                        raise
+                    imported = True
+                if imported:
                     try:
                         # Retain the new generation before attempting compensation.
                         os.link(self.path, recovery)
+                        sync_directory(self.base_dir)
                         if previous is None:
                             self.path.unlink()
                         else:
                             os.replace(backup, self.path)
+                        sync_directory(self.base_dir)
                     except BaseException:
                         retain = True
                         warnings.warn(
                             "Refresh rollback incomplete; "
-                            f"previous metadata retained at {backup}; "
+                            f"previous metadata at {backup} or {self.path}; "
                             f"refreshed metadata at {self.path} or {recovery}",
                             RuntimeWarning,
                             stacklevel=2,
                         )
-                    raise
+                raise
             finally:
                 if not retain:
                     backup.unlink(missing_ok=True)

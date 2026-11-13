@@ -1,5 +1,11 @@
 # Unreleased
 
+* Sync parent directories after replacement and before retiring previous audio;
+  report post-replacement sync failures as uncertain durability while keeping
+  visible audio/metadata coherent and retaining previous audio for inspection.
+* Reject empty successful audio responses before publication, preserving prior
+  files and download links.
+
 * Refuse metadata symlinks without touching their targets. Admit only regular,
   stable no-follow descriptors for metadata, download and feed advisory locks;
   cover FIFO/link refusal and actual two-process serialization.

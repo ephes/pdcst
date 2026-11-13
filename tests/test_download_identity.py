@@ -68,7 +68,14 @@ def test_unowned_file_is_preserved(store, name):
 
 
 @pytest.mark.parametrize(
-    "pattern", ["episodes.json", "episodes.json.lock", "episodes.json.download.lock"]
+    "pattern",
+    [
+        "episodes.json",
+        "episodes.json.lock",
+        "episodes.json.download.lock",
+        ".pdcst-refresh-retained.previous",
+        ".pdcst-refresh-retained.refreshed",
+    ],
 )
 def test_repository_files_cannot_be_audio(store, pattern):
     repo, episode, _, calls = store

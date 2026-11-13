@@ -68,6 +68,8 @@ def _download_with_progress(url, target_path):
                         completed += len(chunk)
                         progress.update(task, completed=completed)
                 check_deadline()
+                if completed == 0:
+                    raise DownloadError("Empty audio response")
                 if total is not None and completed != total:
                     raise DownloadError("Incomplete media response")
     return target_path

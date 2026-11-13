@@ -20,6 +20,7 @@ from .repository import (
     StoreReadError,
     StoreWriteError,
 )
+from .storage import PublicationDurabilityError
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes"]
 
@@ -197,6 +198,8 @@ def add(
         podcast = subscribe(feed_url, name_pattern, podcast_dir)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from None
+    except PublicationDurabilityError as error:
+        raise typer.BadParameter(str(error)) from None
     except OSError:
         raise typer.BadParameter(
             "Unable to update local storage: filesystem error; "
@@ -259,6 +262,7 @@ def download(podcast: str, episode: str):
         DownloadConflict,
         DuplicateIdentity,
         DownloadError,
+        PublicationDurabilityError,
         FilenamePatternError,
         StoreReadError,
         StoreWriteError,
