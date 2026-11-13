@@ -163,10 +163,11 @@ $ pytest
 For an isolated test run, set `PDCST_HOME` to a writable temporary path
 before running pytest. The package requires Pydantic 1 for its current
 storage and settings APIs. Formatting/lint checks are configured in
-`.pre-commit-config.yaml` (Black, isort, pyupgrade, Flake8 and file hygiene).
-No type-checking is configured. GitHub Actions runs the synthetic suite on Linux
-with Python 3.10 and 3.13 and a temporary data root, after installing a wheel with
-the `test` extra. The main suite imports the source checkout; a separate smoke
+`.pre-commit-config.yaml` (Black, isort, pyupgrade, Flake8 and file hygiene);
+run them all with `pre-commit run --all-files` (for example via
+`uvx pre-commit run --all-files`). No type-checking is configured. GitHub
+Actions runs the synthetic suite on Linux with Python 3.10 and 3.13 and a
+temporary data root, after installing a wheel with the `test` extra. The main suite imports the source checkout; a separate smoke
 check imports the installed package in isolated Python mode and runs
 `pdcst --help` from outside the checkout. No subscriptions, accounts,
 or external services are needed.

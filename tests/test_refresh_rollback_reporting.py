@@ -124,7 +124,7 @@ def test_stage_directory_sync_failure_is_an_ordinary_download_failure(
                     stream=httpx.ByteStream(data),
                 )
             ),
-            **kw
+            **kw,
         ),
     )
     repo = EpisodeRepository(tmp_path)

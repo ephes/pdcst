@@ -37,8 +37,10 @@ def test_metadata_links_refused_by_browse_and_refresh(
             return podcast, [episode]
 
     with pytest.raises(StoreReadError):
-        pdcst.list_all_podcasts() if kind == "podcast" else pdcst.list_all_episodes(
-            podcast
+        (
+            pdcst.list_all_podcasts()
+            if kind == "podcast"
+            else pdcst.list_all_episodes(podcast)
         )
     with pytest.raises(StoreReadError):
         pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)

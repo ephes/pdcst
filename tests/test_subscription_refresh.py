@@ -316,9 +316,11 @@ def test_refresh_drops_file_aliases_on_every_host(
             return SimpleNamespace(
                 st_mode=info.st_mode,
                 st_dev=info.st_dev,
-                st_ino=info.st_ino
-                if alias_kind == "inode" or path == first
-                else info.st_ino + 1,
+                st_ino=(
+                    info.st_ino
+                    if alias_kind == "inode" or path == first
+                    else info.st_ino + 1
+                ),
             )
         return original_stat(path, *args, **kwargs)
 

@@ -1,6 +1,7 @@
 """
 Base settings for pdcst.
 """
+
 from math import isfinite
 from pathlib import Path
 
