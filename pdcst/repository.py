@@ -44,6 +44,35 @@ class StoreWriteError(ValueError):
     """Metadata cannot be published within the readable size limit."""
 
 
+@contextmanager
+def advisory_lock(path):
+    """Lock an admitted regular inode without following links or blocking on FIFOs."""
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(
+                path, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW, 0o666
+            )
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("not a regular lock file")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            named = path.lstat()
+            if not stat.S_ISREG(named.st_mode) or (info.st_dev, info.st_ino) != (
+                named.st_dev,
+                named.st_ino,
+            ):
+                raise OSError("lock identity changed")
+        except OSError:
+            raise StoreWriteError(
+                f"Cannot acquire lock {path}: regular stable file required"
+            ) from None
+        yield
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def as_utc(value):
     """Legacy naive storage values represent UTC."""
     if value.tzinfo is None:
@@ -158,7 +187,7 @@ class JsonRepository:
     def _read_bytes(self):
         """Read one bounded regular-file generation, or None for a missing store."""
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
+            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         except FileNotFoundError:
             return None
         except OSError:
@@ -219,12 +248,8 @@ class JsonRepository:
     @contextmanager
     def _lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.with_suffix(self.path.suffix + ".lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with advisory_lock(self.path.with_suffix(self.path.suffix + ".lock")):
+            yield
 
     def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
@@ -318,8 +343,7 @@ class EpisodeRepository(JsonRepository):
         """Claim audio, transfer outside the JSON lock, then commit only its link."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         claim = self.path.with_suffix(self.path.suffix + ".download.lock")
-        with claim.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with advisory_lock(claim):
             # Closing the descriptor releases the claim even when transfer fails.
             with self._lock():
                 self._download_record(
@@ -521,12 +545,8 @@ class PodcastRepository(JsonRepository):
         directory = self.base_dir / ".feed-locks"
         directory.mkdir(parents=True, exist_ok=True)
         name = sha256(url.encode("utf-8")).hexdigest() + ".lock"
-        with (directory / name).open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with advisory_lock(directory / name):
+            yield
 
     def list(self, additional_attributes=None):
         from . import contained_path

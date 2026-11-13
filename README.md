@@ -290,8 +290,11 @@ backup may be removed manually after checking the new audio and metadata; no
 repeat transfer is needed.
 
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
-serialize cooperating writers across reload and atomic replacement. Do not
-remove either kind of lock file while commands are running. Failed serialization
+serialize cooperating writers across reload and atomic replacement. Metadata, download and feed lock descriptors must be regular files, opened
+without following symlinks and without blocking on special files. Their named
+inode is checked again after acquisition. Invalid locks raise a bounded
+`StoreWriteError`; move an invalid lock aside only when no commands are running.
+Do not remove any lock file while commands are running. Failed serialization
 or writes leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. Metadata reads require a regular
 UTF-8 JSON file of at most 16 MiB (including
@@ -299,7 +302,9 @@ files that grow during the read). Writes enforce the same encoded byte ceiling
 before replacement; oversized batches raise `StoreWriteError` (`ValueError`)
 and preserve the previous JSON and audio associations. Subscription refresh
 checks its subscription batch before importing episode metadata.
-Missing stores remain empty. Nonregular files,
+Missing stores remain empty. Metadata symlinks (including dangling links) are
+refused without reading or modifying their targets. Move the link aside and
+restore a regular JSON file at the named path before retrying. Nonregular files,
 oversize input, malformed JSON/schema and filesystem failures raise
 `StoreReadError` (`ValueError`) with the path and a trusted category, never stored
 record values. Every CLI command reports these failures concisely with a nonzero

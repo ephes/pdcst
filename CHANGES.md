@@ -1,5 +1,9 @@
 # Unreleased
 
+* Refuse metadata symlinks without touching their targets. Admit only regular,
+  stable no-follow descriptors for metadata, download and feed advisory locks;
+  cover FIFO/link refusal and actual two-process serialization.
+
 * Restore the previous episode generation if subscription publication fails;
   retain recovery generations when compensation also fails.
 * Refuse NFC/case-equivalent cross-feed directory ownership on every host.
