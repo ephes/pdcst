@@ -215,10 +215,13 @@ patterns must produce a single relative filename. Supported placeholders are
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
 before metadata publication or audio transfer. Both `add` and `download` report
-pattern failures as concise CLI errors. Formatting accepts only decimal width
-(0–255), optional zero padding and `d` for `index`; string fields accept decimal
-width and/or `.precision` (each 0–255), optionally followed by `s`. For example,
-`{index:03d}_{title:.100}.{file_format}` limits the title to 100 characters.
+pattern failures as concise CLI errors. Formatting accepts the standard spec
+syntax with bounded numbers (every width/precision 0–255): an optional fill and
+alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,
+grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`, `n` (not `c`);
+string fields accept width (not starting with `0`) and/or `.precision`,
+optionally followed by `s`. For example, `{index:03d}_{title:.100}.{file_format}`
+limits the title to 100 characters and `{index:>3}` right-aligns the index.
 Other format syntax is refused before formatting. Patterns are limited to 4,096
 characters and the complete basename to 255 UTF-8 bytes, including literals and
 repeated fields; excess output is rejected rather than truncated. Existing

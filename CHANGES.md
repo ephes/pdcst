@@ -6,7 +6,10 @@
   existing or umask-filtered new-file permissions only for publication.
 
 * Bound filename formatting width/precision before expansion and reject basenames
-  over 255 UTF-8 bytes, retaining decimal index zero padding.
+  over 255 UTF-8 bytes, retaining decimal index zero padding and standard
+  fill/alignment, sign and grouping syntax. Newly refused: numbers above 255,
+  the `c` integer type and string widths starting with `0` (which zero-fill on
+  the right); edit such stored patterns in `podcasts.json` or re-add the podcast.
 * Index normalized subscription directory ownership once under the writer lock
   so colliding-title suffix selection uses linear path-resolution work.
 

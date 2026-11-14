@@ -8,6 +8,15 @@ from string import Formatter
 from urllib.parse import urlsplit
 
 FILENAME_MAX_BYTES = 255
+FILENAME_PATTERN_MAX_CHARS = 4096
+# Standard format-spec syntax with bounded numbers (each at most 255, checked
+# separately): optional fill+alignment, then for the integer index sign,
+# "#", zero padding, width, grouping and an integer type (no "c", which could
+# emit arbitrary characters); for text fields width, precision and "s". Text
+# widths cannot start with 0 (that would zero-fill strings on the right).
+_ALIGN = r"(?:[^{}]?[<>=^])?"
+INDEX_SPEC = _ALIGN + r"[+\- ]?#?0?[0-9]{0,3}[,_]?[bdoxXn]?"
+TEXT_SPEC = _ALIGN + r"(?:[1-9][0-9]{0,2})?(?:\.[0-9]{1,3})?s?"
 
 
 class FilenamePatternError(ValueError):
@@ -113,18 +122,16 @@ class Podcast:
             "index": episode.index,
             "title": self.title_for_filename(episode.title),
         }
+        if len(self.file_name_pattern) > FILENAME_PATTERN_MAX_CHARS:
+            raise FilenamePatternError(
+                "Invalid filename pattern: patterns are limited to 4096 characters"
+            )
         try:
-            if len(self.file_name_pattern) > 4096:
-                raise ValueError
             parts = list(Formatter().parse(self.file_name_pattern))
             for _, field, spec, conversion in parts:
                 if field is None:
                     continue
-                grammar = (
-                    r"0?[0-9]{0,3}d?"
-                    if field == "index"
-                    else r"[0-9]{0,3}(?:\.[0-9]{1,3})?s?"
-                )
+                grammar = INDEX_SPEC if field == "index" else TEXT_SPEC
                 if (
                     field not in details
                     or conversion is not None
