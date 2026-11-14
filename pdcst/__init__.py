@@ -86,24 +86,23 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                     if legacy_path.is_dir():
                         podcast.directory = legacy
 
-        def owned(directory):
-            candidate = unicodedata.normalize(
+        def directory_key(directory):
+            return unicodedata.normalize(
                 "NFC", str(contained_path(settings.root, directory))
             ).casefold()
-            for item in subscriptions:
-                if item.feed.url == feed_url:
-                    continue
-                try:
-                    stored_path = contained_path(settings.root, item.directory)
-                except ValueError:
-                    # Unsafe legacy paths cannot own a contained destination.
-                    continue
-                if (
-                    unicodedata.normalize("NFC", str(stored_path)).casefold()
-                    == candidate
-                ):
-                    return True
-            return False
+
+        owners = set()
+        for item in subscriptions:
+            if item.feed.url == feed_url:
+                continue
+            try:
+                owners.add(directory_key(item.directory))
+            except ValueError:
+                # Unsafe legacy paths cannot own a contained destination.
+                continue
+
+        def owned(directory):
+            return directory_key(directory) in owners
 
         if owned(podcast.directory):
             if podcast_dir is not None or existing is not None:

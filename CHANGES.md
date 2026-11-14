@@ -1,5 +1,15 @@
 # Unreleased
 
+* Refuse duplicate JSON object members at every nesting level before validating
+  metadata, using private store-read errors and retaining the original bytes.
+* Restrict replacement staging files to 0600 before writing payload, restoring
+  existing or umask-filtered new-file permissions only for publication.
+
+* Bound filename formatting width/precision before expansion and reject basenames
+  over 255 UTF-8 bytes, retaining decimal index zero padding.
+* Index normalized subscription directory ownership once under the writer lock
+  so colliding-title suffix selection uses linear path-resolution work.
+
 * Repair the pre-commit configuration: Flake8 now comes from its GitHub
   repository (the GitLab URL is gone), isort moves to the PyCQA repository, and
   all hooks are bumped to releases that install on current Python. Black's

@@ -93,6 +93,8 @@ or conflicting audio bytes. New episodes start undownloaded. A safely stored fee
 titles receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
 Directory ownership uses NFC Unicode normalization and case folding on every host.
+Subscription preflight builds one ownership index under the writer lock, resolving
+each other subscription directory once; numbered suffix trials use that index.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
 feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio
 files stay in their old directory; download associations are not migrated to the
@@ -213,8 +215,14 @@ patterns must produce a single relative filename. Supported placeholders are
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
 before metadata publication or audio transfer. Both `add` and `download` report
-pattern failures as concise CLI errors. Existing subscriptions with
-unsafe paths must be corrected before use. Containment assumes other local
+pattern failures as concise CLI errors. Formatting accepts only decimal width
+(0–255), optional zero padding and `d` for `index`; string fields accept decimal
+width and/or `.precision` (each 0–255), optionally followed by `s`. For example,
+`{index:03d}_{title:.100}.{file_format}` limits the title to 100 characters.
+Other format syntax is refused before formatting. Patterns are limited to 4,096
+characters and the complete basename to 255 UTF-8 bytes, including literals and
+repeated fields; excess output is rejected rather than truncated. Existing
+subscriptions with unsafe paths must be corrected before use. Containment assumes other local
 processes do not change directory symlinks while a command is running.
 
 Downloads require an HTTP success response and follow at most five redirects.
@@ -244,7 +252,11 @@ failure while staging the transfer is reported as an ordinary download failure
 completeness check, not an audio codec validation. Responses with a content
 encoding other than identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
 the process umask. Files are flushed into a sibling temporary file
-and atomically replaced after completion. The containing directory is then synced
+and atomically replaced after completion. While empty, the sibling's
+umask-filtered creation mode is captured; before its first payload write it is
+restricted to 0600. After writing and flushing, the destination's existing mode
+(or the captured new-file mode) is restored for publication. The helper never
+changes the process umask. The containing directory is then synced
 before success. Failures before replacement retain the previous file and do not
 mark an episode downloaded. Filesystem errors propagate to the caller.
 The replacement helper closes its descriptor even if opening the stream fails;
@@ -328,8 +340,12 @@ refused without reading or modifying their targets. Move the link aside and
 restore a regular JSON file at the named path before retrying. Nonregular files,
 oversize input, malformed JSON/schema and filesystem failures raise
 `StoreReadError` (`ValueError`) with the path and a trusted category, never stored
-record values. Every CLI command reports these failures concisely with a nonzero
-exit status. Restore/correct the named store (or repair its read permissions)
+record values. Repeated JSON object members are invalid JSON, including identical
+values, escaped spellings of the same name, nested feed fields and unknown fields;
+they are refused before model construction. Original bytes remain untouched for
+manual correction or recovery from a trusted backup. Every CLI command reports
+these failures concisely with a nonzero exit status. Restore/correct the named
+store (or repair its read permissions)
 before retrying; writing operations refuse unreadable existing stores and never
 silently reset them. Reads reload current JSON;
 each subscription listing uses one snapshot for metadata and legacy directories.

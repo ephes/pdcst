@@ -7,6 +7,8 @@ from pathlib import PureWindowsPath
 from string import Formatter
 from urllib.parse import urlsplit
 
+FILENAME_MAX_BYTES = 255
+
 
 class FilenamePatternError(ValueError):
     """A pattern cannot produce a supported single filename."""
@@ -112,17 +114,35 @@ class Podcast:
             "title": self.title_for_filename(episode.title),
         }
         try:
-            for _, field, spec, conversion in Formatter().parse(self.file_name_pattern):
+            if len(self.file_name_pattern) > 4096:
+                raise ValueError
+            parts = list(Formatter().parse(self.file_name_pattern))
+            for _, field, spec, conversion in parts:
                 if field is None:
                     continue
+                grammar = (
+                    r"0?[0-9]{0,3}d?"
+                    if field == "index"
+                    else r"[0-9]{0,3}(?:\.[0-9]{1,3})?s?"
+                )
                 if (
                     field not in details
                     or conversion is not None
-                    or "{" in spec
-                    or "}" in spec
+                    or re.fullmatch(grammar, spec) is None
+                    or any(
+                        int(n) > FILENAME_MAX_BYTES for n in re.findall(r"[0-9]+", spec)
+                    )
                 ):
                     raise ValueError
-            name = self.file_name_pattern.format(**details)
+            chunks = []
+            size = 0
+            for literal, field, spec, _ in parts:
+                chunk = literal + (format(details[field], spec) if field else "")
+                size += len(chunk.encode("utf-8"))
+                if size > FILENAME_MAX_BYTES:
+                    raise ValueError
+                chunks.append(chunk)
+            name = "".join(chunks)
         except (
             KeyError,
             ValueError,
@@ -132,8 +152,8 @@ class Podcast:
             OverflowError,
         ):
             raise FilenamePatternError(
-                "Invalid filename pattern: use index, title and file_format "
-                "without traversal, conversions or nested fields"
+                "Invalid filename pattern: use index, title and file_format; "
+                "decimal width/precision and filename bytes must be at most 255"
             ) from None
         if (
             not name

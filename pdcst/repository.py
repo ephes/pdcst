@@ -109,6 +109,16 @@ def index_unique(models, key):
     return indexed
 
 
+def unique_json_object(pairs):
+    """Reject ambiguous object members at every nesting level, without values."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON member")
+        result[key] = value
+    return result
+
+
 class DownloadConflict(ValueError):
     """Episode identity or destination ownership changed."""
 
@@ -216,7 +226,7 @@ class JsonRepository:
         except UnicodeError:
             raise StoreReadError(self.path, "invalid UTF-8") from None
         try:
-            values = json.loads(decoded)
+            values = json.loads(decoded, object_pairs_hook=unique_json_object)
         except (ValueError, RecursionError):
             raise StoreReadError(self.path, "invalid JSON") from None
         try:
