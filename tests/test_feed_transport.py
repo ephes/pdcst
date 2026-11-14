@@ -1,3 +1,6 @@
+import traceback
+
+import feedparser
 import httpx
 import pytest
 
@@ -128,3 +131,157 @@ def test_relative_enclosure_and_http_metadata(transport, location):
     )
     assert podcast.feed.updated.day == 3
     assert podcast.feed.url == "https://example.test/feed"
+
+
+PRIVATE_URL = (
+    "https://USER_SECRET:PASS_SECRET@example.test/feed"
+    "?credential=QUERY_SECRET#FRAGMENT_SECRET"
+)
+
+
+@pytest.mark.parametrize("entrypoint", ["fetch", "get", "subscribe"])
+@pytest.mark.parametrize(
+    "case,category",
+    [
+        ("status", "HTTP 403"),
+        ("timeout", "timeout"),
+        ("connection", "Unable to fetch"),
+        ("invalid", "Unable to fetch"),
+        ("value", "Unable to fetch"),
+    ],
+)
+def test_feed_transport_errors_do_not_retain_private_causes(
+    tmp_path, monkeypatch, transport, caplog, entrypoint, case, category
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+
+    class UnreadBody(httpx.SyncByteStream):
+        def __iter__(self):
+            pytest.fail("must not read failed response body")
+
+    def respond(request):
+        if case == "status":
+            return httpx.Response(403, stream=UnreadBody())
+        error_type = {
+            "timeout": httpx.ReadTimeout,
+            "connection": httpx.ConnectError,
+            "invalid": httpx.InvalidURL,
+            "value": ValueError,
+        }[case]
+        raise error_type(f"Private failure: {PRIVATE_URL}")
+
+    transport(respond)
+    with pytest.raises(FeedError) as caught:
+        if entrypoint == "fetch":
+            FeedParserRepository.fetch_document(PRIVATE_URL)
+        elif entrypoint == "get":
+            FeedParserRepository().get(PRIVATE_URL, None, "{title}")
+        else:
+            pdcst.subscribe(PRIVATE_URL, "{title}", None)
+    error = caught.value
+    rendered = str(error) + "".join(traceback.format_exception(error)) + caplog.text
+    for marker in ("USER_SECRET", "PASS_SECRET", "QUERY_SECRET", "FRAGMENT_SECRET"):
+        assert marker not in rendered
+    assert category in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert len(str(error)) < 150
+    assert not list(tmp_path.rglob("*.json"))
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "<item><guid>two</guid><title>Truncated",  # an earlier item is complete
+        "</channel></rss><trailing",  # complete root, malformed trailing XML
+        "</channel></rssx>",  # mismatched end tag
+        # A recoverable entity error first must not hide a truncated tail.
+        "<item><guid>two</guid><title>News &amp Views",
+        "<item><guid>two</guid><title>A&nbsp;B</title></item></channel></rss><x",
+        # ... nor a truncated item or mismatched tag before a complete root.
+        "<item><guid>two</guid><title>A & B</channel></rss>",
+        "<item><guid>two</guid><title>A&nbsp;B</titlex></item></channel></rss>",
+        "<item><guid>two</guid><title>A & B</title><x:y/></item></channel></rss>",
+    ],
+)
+def test_fatal_feed_xml_preserves_previous_generation(
+    tmp_path, monkeypatch, transport, tail
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    body = [BODY]
+    transport(lambda request: httpx.Response(200, stream=httpx.ByteStream(body[0])))
+    url = "https://example.test/feed"
+    podcast = pdcst.subscribe(url, "{title}.mp3", None)
+    repo = EpisodeRepository(tmp_path / podcast.directory)
+    episode = repo.list()[0]
+    episode.audio_file = "saved.mp3"
+    repo.add(episode)
+    audio = repo.base_dir / episode.audio_file
+    audio.write_bytes(b"previous synthetic audio")
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    body[0] = (
+        "<rss><channel><title>Changed</title>" + item(enclosures=ENCLOSURE) + tail
+    ).encode()
+    # Pin the parser oracle: this is a fatal structural error, yet a usable
+    # complete first entry survives feedparser's lenient fallback.
+    from xml.sax import SAXParseException
+
+    document = feedparser.parse(body[0])
+    assert document.bozo
+    assert isinstance(document.bozo_exception, SAXParseException)
+    assert document.entries[0].id == "one"
+    with pytest.raises(FeedError, match="malformed or incomplete XML"):
+        pdcst.subscribe(url, "{title}.mp3", None)
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    assert audio.read_bytes() == b"previous synthetic audio"
+    assert not list(tmp_path.rglob(".pdcst-refresh-*"))
+
+
+@pytest.mark.parametrize(
+    "warning",
+    ["content-type", "encoding", "ampersand", "entity", "header-charset", "sjis"],
+)
+def test_complete_feed_with_tolerated_parser_warning_is_accepted(
+    tmp_path, monkeypatch, transport, warning
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    if warning == "content-type":
+        body = BODY
+        headers = {"content-type": "text/plain"}
+        expected = feedparser.NonXMLContentType
+    elif warning == "encoding":
+        body = BODY.replace(b"Synthetic", "Synthétic".encode())
+        headers = {"content-type": "application/rss+xml; charset=us-ascii"}
+        expected = feedparser.CharacterEncodingOverride
+    else:
+        # Recoverable well-formedness errors in a complete document remain
+        # accepted: a bare ampersand or an HTML entity without a DOCTYPE.
+        from xml.sax import SAXParseException
+
+        headers = {}
+        expected = SAXParseException
+        if warning == "ampersand":
+            body = BODY.replace(b"Synthetic", b"News & Views") + b"\n"
+        elif warning == "entity":
+            body = BODY.replace(b"Synthetic", b"News&nbsp;Views")
+        elif warning == "header-charset":
+            # No XML declaration; only the HTTP header names the charset.
+            body = BODY.replace(b"Synthetic", "Café&nbsp;Views".encode("cp1252"))
+            headers = {"content-type": "application/rss+xml; charset=windows-1252"}
+        else:
+            body = b'<?xml version="1.0" encoding="Shift_JIS"?>' + BODY.replace(
+                b"Synthetic", "日本 & Views".encode("shift_jis")
+            )
+    document = feedparser.parse(body, response_headers=headers)
+    assert document.bozo
+    assert isinstance(document.bozo_exception, expected)
+    transport(
+        lambda request: httpx.Response(
+            200, headers=headers, stream=httpx.ByteStream(body)
+        )
+    )
+    podcast = pdcst.subscribe("https://example.test/feed", "{title}", None)
+    assert podcast.episodes_count == 1
+    assert EpisodeRepository(tmp_path / podcast.directory).list()[0].guid == (
+        "https://example.test/one"
+    )

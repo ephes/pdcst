@@ -53,9 +53,15 @@ def _download_with_progress(url, target_path):
             if encoding.strip().lower() not in {"", "identity"}:
                 raise DownloadError("Unsupported media content encoding")
             length = response.headers.get("Content-Length", "")
-            total = int(length) if length.isascii() and length.isdigit() else None
-            if total is not None and total > settings.audio_max_bytes:
-                raise DownloadError("Audio download byte limit exceeded")
+            total = None
+            if length.isascii() and length.isdigit():
+                digits = length.lstrip("0") or "0"
+                limit = str(settings.audio_max_bytes)
+                if len(digits) > len(limit) or (
+                    len(digits) == len(limit) and digits > limit
+                ):
+                    raise DownloadError("Audio download byte limit exceeded")
+                total = int(digits)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             with replacement_file(target_path, binary=True) as output:
                 completed = 0

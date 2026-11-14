@@ -8,6 +8,7 @@ remote api, maybe fastAPI... hmm.
 import fcntl
 import json
 import os
+import re
 import stat
 import time
 import unicodedata
@@ -21,15 +22,64 @@ from operator import itemgetter
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
+from xml.parsers import expat
+from xml.sax import SAXParseException
 
 import feedparser
 import httpx
+from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
 from pydantic import BaseModel, ValidationError, parse_obj_as, validator
 
+from .config import settings
 from .models import Episode, Podcast
 from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
 STORE_MAX_BYTES = 16 * 1024**2
+# Recoverable well-formedness errors that feedparser's lenient fallback repairs
+# (e.g. a bare ``&`` in a title or an HTML entity such as ``&nbsp;`` without a
+# DOCTYPE). expat reports only its first error, so such a document is accepted
+# only if a strict re-parse succeeds once these constructs are neutralised;
+# truncation, mismatched tags or trailing junk later in the body still refuse.
+_RECOVERABLE_XML_ERRORS = frozenset(
+    {"undefined entity", "not well-formed (invalid token)"}
+)
+_UNESCAPED_AMPERSAND = re.compile(
+    r"&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9A-Fa-f]+);)"
+)
+_XML_DECLARATION = re.compile(r"\A\ufeff?(?:<\?xml\b[^>]*\?>)?")
+
+
+def _strictly_well_formed(body: bytes | bytearray, encoding: object) -> bool:
+    # Re-parse the text feedparser decoded (its detected/repaired encoding),
+    # re-encoded as UTF-8 without the original declaration.
+    if not isinstance(encoding, str) or not encoding:
+        encoding = "utf-8"
+    try:
+        text = bytes(body).decode(encoding)
+    except (LookupError, UnicodeDecodeError):
+        return False
+    text = _UNESCAPED_AMPERSAND.sub("&amp;", _XML_DECLARATION.sub("", text, count=1))
+    parser = expat.ParserCreate(encoding="UTF-8", namespace_separator=" ")
+    try:
+        parser.Parse(text.encode("utf-8", "surrogatepass"), True)
+    except (expat.ExpatError, ValueError, UnicodeError):
+        return False
+    return True
+
+
+def _feed_parse_refused(document, body: bytes | bytearray) -> bool:
+    """Return True when feedparser reports a fatal or incomplete document."""
+    if not document.get("bozo"):
+        return False
+    error = document.get("bozo_exception")
+    if isinstance(error, (CharacterEncodingOverride, NonXMLContentType)):
+        return False
+    if (
+        isinstance(error, SAXParseException)
+        and error.getMessage() in _RECOVERABLE_XML_ERRORS
+    ):
+        return not _strictly_well_formed(body, document.get("encoding"))
+    return True
 
 
 class StoreReadError(ValueError):
@@ -47,8 +97,9 @@ class StoreWriteError(ValueError):
 
 @contextmanager
 def advisory_lock(path):
-    """Lock an admitted regular inode without following links or blocking on FIFOs."""
+    """Admit a stable regular inode and wait for it under a monotonic budget."""
     descriptor = None
+    deadline = time.monotonic() + settings.lock_wait_seconds
     try:
         try:
             descriptor = os.open(
@@ -57,7 +108,17 @@ def advisory_lock(path):
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise OSError("not a regular lock file")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise StoreWriteError(
+                        f"Cannot acquire lock {path}: busy (wait limit exceeded); retry later"
+                    )
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(min(0.05, remaining))
             named = path.lstat()
             if not stat.S_ISREG(named.st_mode) or (info.st_dev, info.st_ino) != (
                 named.st_dev,
@@ -703,6 +764,8 @@ class FeedParserRepository:
                         document = feedparser.parse(
                             bytes(body), response_headers=headers
                         )
+                        if _feed_parse_refused(document, body):
+                            raise FeedError("Feed contains malformed or incomplete XML")
                         for entry in document.entries:
                             for enclosure in entry.get("links", []):
                                 if enclosure.get("rel") != "enclosure":
@@ -722,10 +785,17 @@ class FeedParserRepository:
                             except (TypeError, ValueError, OverflowError):
                                 pass
                         return document
-        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as error:
-            if isinstance(error, FeedError):
-                raise
-            raise FeedError("Unable to fetch feed") from error
+        except FeedError:
+            raise
+        except httpx.HTTPStatusError as error:
+            failure = f"Unable to fetch feed (HTTP {error.response.status_code})"
+        except httpx.TimeoutException:
+            failure = "Unable to fetch feed (timeout)"
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+            failure = "Unable to fetch feed"
+        # Raise outside the handler so library callers receive no raw transport
+        # cause or context, including signed URLs in formatted tracebacks.
+        raise FeedError(failure)
 
     AUDIO_TYPES = {
         "audio/mpeg",

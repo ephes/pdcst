@@ -98,14 +98,18 @@ def lock_path(root, kind):
     )
 
 
-def process(root, kind, mode):
+def process(root, kind, mode, wait_seconds="30"):
     return subprocess.Popen(
         [sys.executable, "-c", LOCK_SCRIPT, str(root), kind, mode],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=dict(os.environ, PYTHONPATH=str(Path(pdcst.__file__).parent.parent)),
+        env=dict(
+            os.environ,
+            PYTHONPATH=str(Path(pdcst.__file__).parent.parent),
+            PDCST_LOCK_WAIT_SECONDS=wait_seconds,
+        ),
     )
 
 
@@ -158,3 +162,81 @@ def test_two_processes_serialize_on_stable_lock(tmp_path, kind, episode):
             if child is not None and child.poll() is None:
                 child.kill()
                 child.communicate()
+
+
+@pytest.mark.parametrize("kind", ["metadata", "download", "feed"])
+def test_lock_contention_has_deadline(tmp_path, kind, episode):
+    import select
+
+    if kind == "download":
+        episode.guid = "synthetic"
+        episode.audio_url = "https://example.test/audio"
+        EpisodeRepository(tmp_path).add(episode)
+    holder = process(tmp_path, kind, "hold")
+    contender = None
+    try:
+        assert select.select([holder.stdout], [], [], 5)[0]
+        assert holder.stdout.readline().strip() == "acquired"
+        inode = lock_path(tmp_path, kind).stat().st_ino
+        contender = process(tmp_path, kind, "once", wait_seconds="0.2")
+        out, err = contender.communicate(timeout=3)
+        assert contender.returncode == 2, err
+        assert "busy" in out and "retry" in out
+        assert "acquired" not in out
+        holder.communicate("release\n", timeout=5)
+        assert lock_path(tmp_path, kind).stat().st_ino == inode
+        retry = process(tmp_path, kind, "once", wait_seconds="0.2")
+        out, err = retry.communicate(timeout=5)
+        assert retry.returncode == 0, err
+        assert out.strip() == "acquired"
+    finally:
+        for child in (holder, contender):
+            if child is not None and child.poll() is None:
+                child.kill()
+                child.communicate()
+
+
+def test_interrupted_lock_wait_closes_descriptor(tmp_path, monkeypatch):
+    import pdcst.repository as module
+
+    descriptors = []
+    real_close = os.close
+
+    def contended(descriptor, operation):
+        assert operation & module.fcntl.LOCK_NB
+        descriptors.append(descriptor)
+        raise BlockingIOError("synthetic contention")
+
+    def interrupt(_):
+        raise KeyboardInterrupt
+
+    closed = []
+
+    def close(descriptor):
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(module.fcntl, "flock", contended)
+    monkeypatch.setattr(module.time, "sleep", interrupt)
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(KeyboardInterrupt):
+        with module.advisory_lock(tmp_path / "test.lock"):
+            pytest.fail("must not acquire contended lock")
+    assert closed == descriptors
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+def test_lock_wait_configuration_rejects_invalid_duration(tmp_path, value):
+    from pydantic import ValidationError
+
+    from pdcst.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(root=tmp_path, lock_wait_seconds=value)
+
+
+def test_lock_wait_configuration_environment(tmp_path, monkeypatch):
+    from pdcst.config import Settings
+
+    monkeypatch.setenv("PDCST_LOCK_WAIT_SECONDS", "0.25")
+    assert Settings(root=tmp_path).lock_wait_seconds == 0.25
