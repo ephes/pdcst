@@ -100,3 +100,97 @@ def test_audio_budget_environment(tmp_path, monkeypatch):
     configured = Settings(root=tmp_path)
     assert configured.audio_max_bytes == 123
     assert configured.audio_max_seconds == 456
+
+
+@pytest.mark.parametrize("length", ["9" * 5000, "0" * 5000 + "9"])
+def test_huge_declared_length_is_controlled_and_preserves_audio(
+    tmp_path, monkeypatch, length
+):
+    module = importlib.import_module("pdcst.download")
+    monkeypatch.setattr(
+        module, "settings", SimpleNamespace(audio_max_bytes=8, audio_max_seconds=5)
+    )
+    client = httpx.Client
+    consumed = []
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            consumed.append(True)
+            yield b"data"
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, headers={"Content-Length": length}, stream=Stream()
+                )
+            ),
+            **kw,
+        ),
+    )
+    target = tmp_path / "audio.mp3"
+    target.write_bytes(b"old")
+    with pytest.raises(module.DownloadError, match="byte limit"):
+        module.download_with_progress(
+            "https://example.test/audio?secret=synthetic", target
+        )
+    assert target.read_bytes() == b"old"
+    assert not consumed
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize(
+    "length,expected",
+    [
+        ("0" * 5000 + "4", 4),
+        ("4", 4),
+        ("8", 8),
+        ("0", 0),
+        ("-1", None),
+        ("4.0", None),
+        ("٤", None),
+        ("²", None),
+        ("4x", None),
+    ],
+)
+def test_declared_length_numeric_domain(tmp_path, monkeypatch, length, expected):
+    module = importlib.import_module("pdcst.download")
+    monkeypatch.setattr(
+        module, "settings", SimpleNamespace(audio_max_bytes=8, audio_max_seconds=5)
+    )
+    # A minimal fake admits non-ASCII header values that httpx itself refuses.
+    from contextlib import nullcontext
+
+    response = SimpleNamespace(
+        headers={"Content-Length": length},
+        raise_for_status=lambda: None,
+        iter_raw=lambda: iter([b"data"]),
+    )
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: nullcontext(
+            SimpleNamespace(stream=lambda *a, **kw: nullcontext(response))
+        ),
+    )
+    totals = []
+    original_add_task = module.rich.progress.Progress.add_task
+
+    def add_task(self, description, **kw):
+        totals.append(kw["total"])
+        return original_add_task(self, description, **kw)
+
+    monkeypatch.setattr(module.rich.progress.Progress, "add_task", add_task)
+    target = tmp_path / "audio.mp3"
+    target.write_bytes(b"old")
+    if expected in {0, 8}:
+        with pytest.raises(module.DownloadError, match="Incomplete"):
+            module.download_with_progress("https://example.test/audio", target)
+        assert target.read_bytes() == b"old"
+    else:
+        module.download_with_progress("https://example.test/audio", target)
+        assert target.read_bytes() == b"data"
+    assert totals == [expected]
+    assert list(tmp_path.iterdir()) == [target]

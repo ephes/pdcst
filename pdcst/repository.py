@@ -24,8 +24,10 @@ from uuid import uuid4
 
 import feedparser
 import httpx
+from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
 from pydantic import BaseModel, ValidationError, parse_obj_as, validator
 
+from .config import settings
 from .models import Episode, Podcast
 from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
@@ -47,8 +49,9 @@ class StoreWriteError(ValueError):
 
 @contextmanager
 def advisory_lock(path):
-    """Lock an admitted regular inode without following links or blocking on FIFOs."""
+    """Admit a stable regular inode and wait for it under a monotonic budget."""
     descriptor = None
+    deadline = time.monotonic() + settings.lock_wait_seconds
     try:
         try:
             descriptor = os.open(
@@ -57,7 +60,17 @@ def advisory_lock(path):
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise OSError("not a regular lock file")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise StoreWriteError(
+                        f"Cannot acquire lock {path}: busy (wait limit exceeded); retry later"
+                    )
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(min(0.05, remaining))
             named = path.lstat()
             if not stat.S_ISREG(named.st_mode) or (info.st_dev, info.st_ino) != (
                 named.st_dev,
@@ -703,6 +716,11 @@ class FeedParserRepository:
                         document = feedparser.parse(
                             bytes(body), response_headers=headers
                         )
+                        if document.get("bozo") and not isinstance(
+                            document.get("bozo_exception"),
+                            (CharacterEncodingOverride, NonXMLContentType),
+                        ):
+                            raise FeedError("Feed contains malformed or incomplete XML")
                         for entry in document.entries:
                             for enclosure in entry.get("links", []):
                                 if enclosure.get("rel") != "enclosure":
@@ -722,10 +740,17 @@ class FeedParserRepository:
                             except (TypeError, ValueError, OverflowError):
                                 pass
                         return document
-        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as error:
-            if isinstance(error, FeedError):
-                raise
-            raise FeedError("Unable to fetch feed") from error
+        except FeedError:
+            raise
+        except httpx.HTTPStatusError as error:
+            failure = f"Unable to fetch feed (HTTP {error.response.status_code})"
+        except httpx.TimeoutException:
+            failure = "Unable to fetch feed (timeout)"
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+            failure = "Unable to fetch feed"
+        # Raise outside the handler so library callers receive no raw transport
+        # cause or context, including signed URLs in formatted tracebacks.
+        raise FeedError(failure)
 
     AUDIO_TYPES = {
         "audio/mpeg",

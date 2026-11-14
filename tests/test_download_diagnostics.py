@@ -24,6 +24,7 @@ URL = (
         ("timeout", "Unable to fetch audio"),
         ("redirect", "Unable to fetch audio"),
         ("declared", "Audio download byte limit exceeded"),
+        ("huge-declared", "Audio download byte limit exceeded"),
         ("chunked", "Audio download byte limit exceeded"),
         ("duration", "Audio download duration limit exceeded"),
         ("encoded", "Unsupported media content encoding"),
@@ -69,6 +70,8 @@ def test_cli_download_errors_are_private_and_preserve_state(
         headers = {}
         if case == "declared":
             headers["Content-Length"] = "9"
+        if case == "huge-declared":
+            headers["Content-Length"] = "9" * 5000
         if case == "encoded":
             headers["Content-Encoding"] = "gzip"
         if case == "short":

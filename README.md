@@ -106,7 +106,20 @@ and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejecte
 Acquisition checks a 30-second elapsed deadline across redirects and chunks, with
 HTTP operation timeouts of at most 10 seconds (a blocked operation may run until
 its timeout before the elapsed deadline is checked again). Fetch failures raise
-`FeedError` and leave subscription and episode JSON unchanged. Relative enclosure
+`FeedError` and leave subscription and episode JSON unchanged. Transport failures
+report only a bounded category (including HTTP status or timeout when available).
+Library exceptions retain no underlying transport cause/context, so their messages
+and formatted tracebacks omit private URL credentials, queries and fragments.
+Failed HTTP response bodies are not read for diagnostics.
+
+Malformed or incomplete XML is refused before using partial parser entries,
+including truncated items, mismatched tags and malformed trailing XML. Parser
+failures also refuse unknown encodings and undeclared namespaces. Complete feeds
+with feedparser's `NonXMLContentType` or `CharacterEncodingOverride` warnings
+remain accepted: a wrong MIME type or a successfully repaired encoding declaration
+alone does not invalidate an otherwise complete feed. Refusal preserves the
+previous subscription, episode inventory and audio associations.
+Relative enclosure
 URLs resolve against the final response URL or its Content-Location header;
 HTTP Last-Modified remains a date fallback.
 
@@ -246,7 +259,10 @@ CLI download failures report a concise nonzero error without private URL userinf
 or fragment values, or transport exception chains. HTTP failures include only
 their status code. Transfer failures preserve previous audio and download metadata,
 and remove only this download's temporary file.
-Missing or invalid Content-Length uses indeterminate progress. A valid length
+Missing or malformed Content-Length (including non-ASCII digits) uses
+indeterminate progress. ASCII decimal lengths are compared to the byte budget
+before integer conversion, ignoring leading zeros; arbitrarily large declared
+values raise `DownloadError` before creating output. A valid length
 must match the received bytes. A response must contain at least one body byte;
 empty success responses raise `DownloadError` and preserve previous audio and
 metadata, including zero-length and empty chunked responses. A directory-sync
@@ -330,6 +346,13 @@ download and feed lock descriptors must be regular files, opened
 without following symlinks and without blocking on special files. Their named
 inode is checked again after acquisition. Invalid locks raise a bounded
 `StoreWriteError`; move an invalid lock aside only when no commands are running.
+Lock contention waits at most 30 seconds per acquisition by default. Set
+`PDCST_LOCK_WAIT_SECONDS` to a positive finite duration in seconds to change
+that limit (including for feed and download claim locks). The wait uses a
+monotonic clock; expiry raises `StoreWriteError` with a busy/retry diagnostic
+and closes the descriptor. Retry the command after the other writer finishes,
+or increase the limit for intentionally long operations. Already held locks
+remain held for their operation; the limit bounds waiting, not operation time.
 Do not remove any lock file while commands are running. Failed serialization
 or writes before replacement leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. Metadata reads require a regular

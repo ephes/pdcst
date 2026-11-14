@@ -1,5 +1,15 @@
 # Unreleased
 
+* Report feed transport failures with private HTTP/timeout categories and no raw
+  exception cause/context, including for library callers and formatted tracebacks.
+* Refuse malformed/truncated feed XML before admitting partial episodes; retain
+  tolerance for wrong MIME types and successfully repaired encoding declarations.
+
+* Bound advisory lock contention to 30 seconds per acquisition, configurable with
+  `PDCST_LOCK_WAIT_SECONDS`; report busy/retry errors and close interrupted waits.
+* Compare audio Content-Length against the byte budget before integer conversion,
+  accepting leading zeros and refusing huge lengths with a private DownloadError.
+
 * Refuse duplicate JSON object members at every nesting level before validating
   metadata, using private store-read errors and retaining the original bytes.
 * Restrict replacement staging files to 0600 before writing payload, restoring
