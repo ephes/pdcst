@@ -8,6 +8,7 @@ remote api, maybe fastAPI... hmm.
 import fcntl
 import json
 import os
+import re
 import stat
 import time
 import unicodedata
@@ -21,6 +22,8 @@ from operator import itemgetter
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
+from xml.parsers import expat
+from xml.sax import SAXParseException
 
 import feedparser
 import httpx
@@ -32,6 +35,51 @@ from .models import Episode, Podcast
 from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
 STORE_MAX_BYTES = 16 * 1024**2
+# Recoverable well-formedness errors that feedparser's lenient fallback repairs
+# (e.g. a bare ``&`` in a title or an HTML entity such as ``&nbsp;`` without a
+# DOCTYPE). expat reports only its first error, so such a document is accepted
+# only if a strict re-parse succeeds once these constructs are neutralised;
+# truncation, mismatched tags or trailing junk later in the body still refuse.
+_RECOVERABLE_XML_ERRORS = frozenset(
+    {"undefined entity", "not well-formed (invalid token)"}
+)
+_UNESCAPED_AMPERSAND = re.compile(
+    r"&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9A-Fa-f]+);)"
+)
+_XML_DECLARATION = re.compile(r"\A\ufeff?(?:<\?xml\b[^>]*\?>)?")
+
+
+def _strictly_well_formed(body: bytes | bytearray, encoding: object) -> bool:
+    # Re-parse the text feedparser decoded (its detected/repaired encoding),
+    # re-encoded as UTF-8 without the original declaration.
+    if not isinstance(encoding, str) or not encoding:
+        encoding = "utf-8"
+    try:
+        text = bytes(body).decode(encoding)
+    except (LookupError, UnicodeDecodeError):
+        return False
+    text = _UNESCAPED_AMPERSAND.sub("&amp;", _XML_DECLARATION.sub("", text, count=1))
+    parser = expat.ParserCreate(encoding="UTF-8", namespace_separator=" ")
+    try:
+        parser.Parse(text.encode("utf-8", "surrogatepass"), True)
+    except (expat.ExpatError, ValueError, UnicodeError):
+        return False
+    return True
+
+
+def _feed_parse_refused(document, body: bytes | bytearray) -> bool:
+    """Return True when feedparser reports a fatal or incomplete document."""
+    if not document.get("bozo"):
+        return False
+    error = document.get("bozo_exception")
+    if isinstance(error, (CharacterEncodingOverride, NonXMLContentType)):
+        return False
+    if (
+        isinstance(error, SAXParseException)
+        and error.getMessage() in _RECOVERABLE_XML_ERRORS
+    ):
+        return not _strictly_well_formed(body, document.get("encoding"))
+    return True
 
 
 class StoreReadError(ValueError):
@@ -716,10 +764,7 @@ class FeedParserRepository:
                         document = feedparser.parse(
                             bytes(body), response_headers=headers
                         )
-                        if document.get("bozo") and not isinstance(
-                            document.get("bozo_exception"),
-                            (CharacterEncodingOverride, NonXMLContentType),
-                        ):
+                        if _feed_parse_refused(document, body):
                             raise FeedError("Feed contains malformed or incomplete XML")
                         for entry in document.entries:
                             for enclosure in entry.get("links", []):

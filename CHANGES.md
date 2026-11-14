@@ -3,7 +3,9 @@
 * Report feed transport failures with private HTTP/timeout categories and no raw
   exception cause/context, including for library callers and formatted tracebacks.
 * Refuse malformed/truncated feed XML before admitting partial episodes; retain
-  tolerance for wrong MIME types and successfully repaired encoding declarations.
+  tolerance for wrong MIME types, successfully repaired encoding declarations and
+  recoverable entity errors (bare `&`, HTML entities) in documents that are
+  otherwise well-formed under a strict re-parse.
 
 * Bound advisory lock contention to 30 seconds per acquisition, configurable with
   `PDCST_LOCK_WAIT_SECONDS`; report busy/retry errors and close interrupted waits.

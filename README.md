@@ -117,8 +117,13 @@ including truncated items, mismatched tags and malformed trailing XML. Parser
 failures also refuse unknown encodings and undeclared namespaces. Complete feeds
 with feedparser's `NonXMLContentType` or `CharacterEncodingOverride` warnings
 remain accepted: a wrong MIME type or a successfully repaired encoding declaration
-alone does not invalidate an otherwise complete feed. Refusal preserves the
-previous subscription, episode inventory and audio associations.
+alone does not invalidate an otherwise complete feed. Recoverable entity errors
+(a bare `&` or an HTML entity such as `&nbsp;` without a DOCTYPE) are repaired
+by the lenient parser and accepted only when a strict re-parse with those
+constructs escaped succeeds; any truncation, mismatched tag, undeclared
+namespace or trailing junk elsewhere in the document still refuses the feed.
+Refusal preserves the previous subscription, episode inventory and audio
+associations.
 Relative enclosure
 URLs resolve against the final response URL or its Content-Location header;
 HTTP Last-Modified remains a date fallback.

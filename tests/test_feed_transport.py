@@ -195,6 +195,13 @@ def test_feed_transport_errors_do_not_retain_private_causes(
         "<item><guid>two</guid><title>Truncated",  # an earlier item is complete
         "</channel></rss><trailing",  # complete root, malformed trailing XML
         "</channel></rssx>",  # mismatched end tag
+        # A recoverable entity error first must not hide a truncated tail.
+        "<item><guid>two</guid><title>News &amp Views",
+        "<item><guid>two</guid><title>A&nbsp;B</title></item></channel></rss><x",
+        # ... nor a truncated item or mismatched tag before a complete root.
+        "<item><guid>two</guid><title>A & B</channel></rss>",
+        "<item><guid>two</guid><title>A&nbsp;B</titlex></item></channel></rss>",
+        "<item><guid>two</guid><title>A & B</title><x:y/></item></channel></rss>",
     ],
 )
 def test_fatal_feed_xml_preserves_previous_generation(
@@ -230,7 +237,10 @@ def test_fatal_feed_xml_preserves_previous_generation(
     assert not list(tmp_path.rglob(".pdcst-refresh-*"))
 
 
-@pytest.mark.parametrize("warning", ["content-type", "encoding"])
+@pytest.mark.parametrize(
+    "warning",
+    ["content-type", "encoding", "ampersand", "entity", "header-charset", "sjis"],
+)
 def test_complete_feed_with_tolerated_parser_warning_is_accepted(
     tmp_path, monkeypatch, transport, warning
 ):
@@ -239,10 +249,29 @@ def test_complete_feed_with_tolerated_parser_warning_is_accepted(
         body = BODY
         headers = {"content-type": "text/plain"}
         expected = feedparser.NonXMLContentType
-    else:
+    elif warning == "encoding":
         body = BODY.replace(b"Synthetic", "Synthétic".encode())
         headers = {"content-type": "application/rss+xml; charset=us-ascii"}
         expected = feedparser.CharacterEncodingOverride
+    else:
+        # Recoverable well-formedness errors in a complete document remain
+        # accepted: a bare ampersand or an HTML entity without a DOCTYPE.
+        from xml.sax import SAXParseException
+
+        headers = {}
+        expected = SAXParseException
+        if warning == "ampersand":
+            body = BODY.replace(b"Synthetic", b"News & Views") + b"\n"
+        elif warning == "entity":
+            body = BODY.replace(b"Synthetic", b"News&nbsp;Views")
+        elif warning == "header-charset":
+            # No XML declaration; only the HTTP header names the charset.
+            body = BODY.replace(b"Synthetic", "Café&nbsp;Views".encode("cp1252"))
+            headers = {"content-type": "application/rss+xml; charset=windows-1252"}
+        else:
+            body = b'<?xml version="1.0" encoding="Shift_JIS"?>' + BODY.replace(
+                b"Synthetic", "日本 & Views".encode("shift_jis")
+            )
     document = feedparser.parse(body, response_headers=headers)
     assert document.bozo
     assert isinstance(document.bozo_exception, expected)
