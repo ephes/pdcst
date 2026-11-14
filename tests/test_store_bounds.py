@@ -1,12 +1,63 @@
 """Bounded metadata reads with synthetic filesystem faults on every host."""
 
+import json
 import stat
 from types import SimpleNamespace
 
 import pytest
 
 from pdcst import repository
-from pdcst.repository import EpisodeRepository
+from pdcst.repository import EpisodeRepository, PodcastRepository, StoreReadError
+
+
+@pytest.mark.parametrize("field", ["guid", "audio_file", "url"])
+@pytest.mark.parametrize("operation", ["list", "add"])
+@pytest.mark.parametrize("identical", [False, True])
+def test_duplicate_members_refused_without_mutation(
+    tmp_path, podcast, episode, field, operation, identical
+):
+    repo, model = (
+        (PodcastRepository(tmp_path), podcast)
+        if field == "url"
+        else (EpisodeRepository(tmp_path), episode)
+    )
+    episode.audio_file = "saved.mp3"
+    audio = tmp_path / "saved.mp3"
+    audio.write_bytes(b"synthetic audio")
+    repo.add(model)
+    original = repo.path.read_text()
+    # Duplicate a real member (nested for url), including identical values.
+    marker = json.dumps(field) + ":"
+    duplicate = json.dumps(
+        (podcast.feed.url if field == "url" else getattr(episode, field))
+        if identical
+        else "SIGNED_SENTINEL"
+    )
+    ambiguous = original.replace(marker, marker + duplicate + "," + marker, 1)
+    # JSON-equivalent spellings are the same member, too.
+    ambiguous = ambiguous.replace(
+        json.dumps(field), f'"\\u{ord(field[0]):04x}{field[1:]}"', 1
+    )
+    repo.path.write_text(ambiguous)
+    before = repo.path.read_bytes()
+    with pytest.raises(StoreReadError, match="invalid JSON") as error:
+        repo.list() if operation == "list" else repo.add(model)
+    assert "SIGNED_SENTINEL" not in str(error.value)
+    assert repo.path.read_bytes() == before
+    assert audio.read_bytes() == b"synthetic audio"
+
+
+def test_unique_unicode_members_and_identities_round_trip(tmp_path, episode):
+    repo = EpisodeRepository(tmp_path)
+    episode.title = "Épisode 雨"
+    episode.guid = "synthetic-é"
+    repo.add(episode)
+    row = json.loads(repo.path.read_text())[0]
+    repo.path.write_text(
+        json.dumps([dict(row, extra={"é": 1, "雨": 2})], ensure_ascii=False)
+    )
+    assert repo.list()[0].title == episode.title
+    assert repo.list()[0].guid == episode.guid
 
 
 def test_missing_and_valid_store(tmp_path, episode):

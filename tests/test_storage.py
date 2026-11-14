@@ -1,6 +1,7 @@
 """Atomic file publication contracts with synthetic, injected OS failures."""
 
 import errno
+import os
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,39 @@ from types import SimpleNamespace
 import pytest
 
 from pdcst import storage
+
+
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_payload_stays_private_until_publication(
+    tmp_path, monkeypatch, binary, existing
+):
+    target = tmp_path / "saved"
+    if existing:
+        target.write_bytes(b"old")
+        target.chmod(0o600)
+    original_fdopen = storage.os.fdopen
+
+    def fdopen(descriptor, *args, **kwargs):
+        # Check before a caller can write even the first byte.
+        assert stat.S_IMODE(os.fstat(descriptor).st_mode) & 0o077 == 0
+        return original_fdopen(descriptor, *args, **kwargs)
+
+    monkeypatch.setattr(storage.os, "fdopen", fdopen)
+    previous = os.umask(0o022)
+    try:
+        with storage.replacement_file(target, binary=binary) as output:
+            output.write(
+                b"private synthetic URL" if binary else "private synthetic URL"
+            )
+            output.flush()
+            (staging,) = tmp_path.glob(".*.tmp")
+            assert stat.S_IMODE(staging.stat().st_mode) & 0o077 == 0
+            assert staging.read_bytes() == b"private synthetic URL"
+        assert stat.S_IMODE(target.stat().st_mode) == (0o600 if existing else 0o644)
+    finally:
+        os.umask(previous)
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 @pytest.mark.parametrize("binary", [False, True])
@@ -62,7 +96,10 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
             assert not target.exists()
     assert target.read_bytes() == (data if binary else data.encode("utf-8"))
     assert requested_modes == [0o666]
-    assert preserved_modes == ([0o640] if existing else [])
+    assert preserved_modes[0] == 0o600
+    assert len(preserved_modes) == 2
+    if existing:
+        assert preserved_modes[1] == 0o640
     assert sentinel.read_bytes() == b"unrelated"
     assert set(tmp_path.iterdir()) == {target, sentinel}
 
@@ -75,6 +112,7 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
         "fdopen_after_open",
         "flush",
         "chmod",
+        "publish_chmod",
         "fsync",
         "close",
         "replace",
@@ -94,6 +132,7 @@ def test_failure_preserves_target_and_closes_descriptor(
     injected = []
     original_open = storage.os.open
     original_fdopen = storage.os.fdopen
+    original_fchmod = storage.os.fchmod
 
     def fail():
         injected.append(failure)
@@ -139,6 +178,17 @@ def test_failure_preserves_target_and_closes_descriptor(
 
     monkeypatch.setattr(storage.os, "open", open_file)
     monkeypatch.setattr(storage.os, "fdopen", fdopen)
+    if failure == "publish_chmod":
+        chmod_calls = 0
+
+        def fchmod(fd, mode):
+            nonlocal chmod_calls
+            chmod_calls += 1
+            if chmod_calls == 2:
+                fail()
+            original_fchmod(fd, mode)
+
+        monkeypatch.setattr(storage.os, "fchmod", fchmod)
     if failure in {"chmod", "fsync", "replace"}:
         name = "fchmod" if failure == "chmod" else failure
         monkeypatch.setattr(storage.os, name, lambda *args: fail())

@@ -33,6 +33,10 @@ def replacement_file(target, *, binary=False):
     try:
         # Keep descriptor ownership here even if stream construction fails midway.
         try:
+            # Capture umask-filtered new-file permissions while the file is empty;
+            # never expose payload through the staging name while writing it.
+            creation_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            os.fchmod(descriptor, 0o600)
             with os.fdopen(
                 descriptor,
                 "wb" if binary else "w",
@@ -44,9 +48,8 @@ def replacement_file(target, *, binary=False):
                 try:
                     mode = stat.S_IMODE(target.stat().st_mode)
                 except FileNotFoundError:
-                    pass
-                else:
-                    os.fchmod(output.fileno(), mode)
+                    mode = creation_mode
+                os.fchmod(output.fileno(), mode)
                 os.fsync(output.fileno())
         finally:
             os.close(descriptor)

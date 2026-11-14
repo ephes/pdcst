@@ -88,6 +88,36 @@ def test_distinct_feeds_have_distinct_directories(tmp_path, monkeypatch, feed, t
     assert before == {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
 
 
+def test_collision_directory_resolutions_are_linear(tmp_path, monkeypatch, podcast):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    repo = PodcastRepository(tmp_path)
+    count = 1000
+    subscriptions = []
+    for number in range(1, count + 1):
+        stored = copy.deepcopy(podcast)
+        stored.feed.url = f"https://example.test/{number}"
+        stored.directory = "PYTHON_PODCAST" + (f"_{number}" if number > 1 else "")
+        subscriptions.append(stored)
+    repo.add_list(subscriptions)
+    calls = 0
+    original = pdcst.contained_path
+
+    def counted(*args):
+        nonlocal calls
+        calls += 1
+        # Fail early on the quadratic implementation without a slow test.
+        assert calls <= 2 * count + 5
+        return original(*args)
+
+    class Parser:
+        def get(self, *_):
+            return podcast, []
+
+    monkeypatch.setattr(pdcst, "contained_path", counted)
+    result = pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
+    assert result.directory == f"python_podcast_{count + 1}"
+
+
 @pytest.mark.parametrize("unsafe", ["../outside", "/absolute", "escaping-link"])
 def test_unsafe_legacy_subscription_does_not_block_others(
     tmp_path, monkeypatch, podcast, unsafe

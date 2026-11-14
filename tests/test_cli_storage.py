@@ -132,7 +132,9 @@ def cli_store(tmp_path, monkeypatch, podcast, episode):
         ("download", "episodes"),
     ],
 )
-@pytest.mark.parametrize("kind", ["json", "utf8", "schema", "permission"])
+@pytest.mark.parametrize(
+    "kind", ["json", "utf8", "schema", "permission", "duplicate", "duplicate_unknown"]
+)
 def test_cli_store_errors_preserve_private_metadata(
     cli_store, monkeypatch, command, kind, location
 ):
@@ -144,7 +146,15 @@ def test_cli_store_errors_preserve_private_metadata(
         "json": b'{"SIGNED_SENTINEL":',
         "utf8": b"\xffSIGNED_SENTINEL",
         "schema": b'[{"audio_url":"https://example.invalid/?SIGNED_SENTINEL"}]',
+        # Unknown members must also be unambiguous, before schema validation.
+        "duplicate_unknown": repo.path.read_bytes().replace(
+            b"[{", b'[{"SIGNED_SENTINEL":1,"SIGNED_SENTINEL":2,', 1
+        ),
     }
+    member = b'"url":' if location == "podcasts" else b'"audio_file":'
+    data["duplicate"] = repo.path.read_bytes().replace(
+        member, member + b'"SIGNED_SENTINEL",' + member, 1
+    )
     if kind == "permission":
         original_open = repository.os.open
 
@@ -175,7 +185,17 @@ def test_cli_store_errors_preserve_private_metadata(
 
 @pytest.mark.parametrize("command", ["add", "download"])
 @pytest.mark.parametrize(
-    "pattern", ["{unknown}", "{", "{title:03d}", "{title.__class__}", "../{title}.mp3"]
+    "pattern",
+    [
+        "{unknown}",
+        "{",
+        "{title:03d}",
+        "{title.__class__}",
+        "../{title}.mp3",
+        "{title:256}",
+        "{title:.256}",
+        "{title}" * 24,
+    ],
 )
 def test_cli_pattern_errors_precede_mutation(cli_store, monkeypatch, command, pattern):
     podcasts, episodes, podcast, _, forbidden = cli_store
