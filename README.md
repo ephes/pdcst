@@ -408,3 +408,12 @@ newer one. Different feeds acquire independently and share the subscription
 lock only during publication. Lock order is feed, subscription, then episode;
 refresh never takes the download claim lock. Failed refreshes release the lock
 and can be retried. Do not remove `.feed-locks/` files while commands are running.
+
+Metadata reads compare the opened descriptor's device/inode, size and nanosecond
+modification/change timestamps after the bounded read. In-place rewrites are
+refused as a changed generation, including same-size rewrites. Atomic replacement
+can still return the coherent old descriptor (unlink-only change timestamps do
+not invalidate unchanged bytes). Retry after an external writer finishes.
+Stored episode indices must be JSON integers greater than zero; subscription
+counts must be JSON integers at least zero. Booleans, strings and fractional
+numbers are refused through the private schema error, without rewriting the store.

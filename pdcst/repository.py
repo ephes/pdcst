@@ -28,7 +28,7 @@ from xml.sax import SAXParseException
 import feedparser
 import httpx
 from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
-from pydantic import BaseModel, ValidationError, parse_obj_as, validator
+from pydantic import BaseModel, ValidationError, conint, parse_obj_as, validator
 
 from .config import settings
 from .models import Episode, Podcast
@@ -192,7 +192,7 @@ class FeedInDb(BaseModel):
 
 
 class EpisodeInDb(BaseModel):
-    index: int
+    index: conint(strict=True, gt=0)
     guid: str
     audio_url: str
     published: datetime
@@ -217,7 +217,7 @@ class EpisodeListInDb(BaseModel):
 class PodcastInDb(BaseModel):
     feed: FeedInDb
     title: str
-    episodes_count: int
+    episodes_count: conint(strict=True, ge=0)
     file_name_pattern: str
     directory: str | None
 
@@ -274,6 +274,23 @@ class JsonRepository:
                 data = source.read(STORE_MAX_BYTES + 1)
                 if len(data) > STORE_MAX_BYTES:
                     raise StoreReadError(self.path, "size limit exceeded (16 MiB)")
+                after = os.fstat(source.fileno())
+
+                def generation(value):
+                    return (
+                        value.st_dev,
+                        value.st_ino,
+                        value.st_size,
+                        value.st_mtime_ns,
+                    )
+
+                # Atomic replacement unlinks the opened inode, changing ctime
+                # without changing its bytes. Still read that coherent descriptor.
+                unlinked = after.st_nlink < info.st_nlink
+                if generation(info) != generation(after) or (
+                    info.st_ctime_ns != after.st_ctime_ns and not unlinked
+                ):
+                    raise StoreReadError(self.path, "file generation changed; retry")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         return data
