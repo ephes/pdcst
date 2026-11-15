@@ -2,6 +2,7 @@
 
 import copy
 import importlib
+import json
 import os
 import stat
 from pathlib import Path
@@ -108,7 +109,11 @@ def test_download_syncs_publications_before_retiring_backup(
             assert repo.path.read_bytes() == old_json
         else:
             assert target.read_bytes() == b"completed"
-            assert repo.list()[0].audio_file == target.name
+            from pdcst.repository import StoreReadError
+
+            with pytest.raises(StoreReadError, match="unresolved publication"):
+                repo.list()
+            assert json.loads(repo.path.read_text())[0]["audio_file"] == target.name
             assert any(
                 p.read_bytes() == b"previous" for p in tmp_path.glob("*.previous")
             )
@@ -118,7 +123,7 @@ def test_download_syncs_publications_before_retiring_backup(
                 assert repo.download_episode(episode, target.name, transfer) == target
         else:
             assert repo.download_episode(episode, target.name, transfer) == target
-        assert events == ["audio", "metadata", "retire", "metadata"]
+        assert events == ["audio", "metadata", "metadata", "retire", "metadata"]
         assert not list(tmp_path.glob("*.previous"))
 
 
@@ -139,7 +144,7 @@ def test_refresh_directory_sync_failure_keeps_published_pair(
     def fsync(fd):
         if (
             stat.S_ISDIR(os.fstat(fd).st_mode)
-            and podcasts.list()[0].episodes_count == 1
+            and json.loads(podcasts.path.read_text())[0]["episodes_count"] == 1
         ):
             raise OSError("synthetic directory sync")
         sync(fd)
@@ -151,8 +156,13 @@ def test_refresh_directory_sync_failure_keeps_published_pair(
     monkeypatch.setattr(os, "fsync", fsync)
     with pytest.raises(OSError, match="durability uncertain"):
         pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
-    assert podcasts.list()[0].episodes_count == 1
-    assert episodes.list()[0].title == "Refreshed"
+    from pdcst.repository import StoreReadError
+
+    assert json.loads(podcasts.path.read_text())[0]["episodes_count"] == 1
+    assert json.loads(episodes.path.read_text())[0]["title"] == "Refreshed"
+    for repo in (podcasts, episodes):
+        with pytest.raises(StoreReadError, match="unresolved publication"):
+            repo.list()
 
 
 @pytest.mark.parametrize(

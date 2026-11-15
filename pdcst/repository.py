@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import sys
 import time
 import unicodedata
 import warnings
@@ -28,10 +29,10 @@ from xml.sax import SAXParseException
 import feedparser
 import httpx
 from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
-from pydantic import BaseModel, ValidationError, parse_obj_as, validator
+from pydantic import BaseModel, ValidationError, conint, parse_obj_as, validator
 
 from .config import settings
-from .models import Episode, Podcast
+from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
 from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
 STORE_MAX_BYTES = 16 * 1024**2
@@ -93,6 +94,24 @@ class StoreReadError(ValueError):
 
 class StoreWriteError(ValueError):
     """Metadata cannot be safely written or its advisory lock admitted."""
+
+
+REFRESH_INTENT = ".pdcst-refresh-intent.json"
+AUDIO_INTENT = ".pdcst-download-intent.json"
+
+
+def write_intent(path, details):
+    """Durably record recovery paths before publishing any affected generation."""
+    with replacement_file(path, binary=True) as output:
+        output.write(json.dumps(details).encode("utf-8"))
+
+
+def clear_intent(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    sync_directory(path.parent)
 
 
 @contextmanager
@@ -192,12 +211,19 @@ class FeedInDb(BaseModel):
 
 
 class EpisodeInDb(BaseModel):
-    index: int
+    index: conint(strict=True, gt=0)
     guid: str
     audio_url: str
     published: datetime
     title: str
     audio_file: str | None
+    audio_media_type: str | None = None
+
+    @validator("audio_media_type")
+    def supported_media_type(cls, value):
+        if value is not None and value not in AUDIO_MIME_EXTENSIONS:
+            raise ValueError("unsupported audio media type")
+        return value
 
     _utc_published = validator("published", allow_reuse=True)(as_utc)
 
@@ -217,7 +243,7 @@ class EpisodeListInDb(BaseModel):
 class PodcastInDb(BaseModel):
     feed: FeedInDb
     title: str
-    episodes_count: int
+    episodes_count: conint(strict=True, ge=0)
     file_name_pattern: str
     directory: str | None
 
@@ -274,11 +300,76 @@ class JsonRepository:
                 data = source.read(STORE_MAX_BYTES + 1)
                 if len(data) > STORE_MAX_BYTES:
                     raise StoreReadError(self.path, "size limit exceeded (16 MiB)")
+                after = os.fstat(source.fileno())
+
+                def generation(value):
+                    return (
+                        value.st_dev,
+                        value.st_ino,
+                        value.st_size,
+                        value.st_mtime_ns,
+                    )
+
+                # Atomic replacement unlinks the opened inode, changing ctime
+                # without changing its bytes. Still read that coherent descriptor.
+                unlinked = after.st_nlink < info.st_nlink
+                if generation(info) != generation(after) or (
+                    info.st_ctime_ns != after.st_ctime_ns and not unlinked
+                ):
+                    raise StoreReadError(self.path, "file generation changed; retry")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         return data
 
+    def _lock_path(self):
+        return self.path.with_suffix(self.path.suffix + ".lock")
+
+    def _check_intents(self):
+        """Refuse a marker left by an interrupted publication.
+
+        Writers publish and retire intents while holding this store's lock. An
+        unlocked reader that sees a marker therefore waits (bounded by the lock
+        wait limit) for that lock and re-checks: a live publication has retired
+        its marker by then, and a marker still present is unresolved.
+        """
+        markers = self._intent_markers()
+        if not markers:
+            return
+        if not self.__dict__.get("_lock_depth"):
+            try:
+                with self._lock():
+                    pass
+            except StoreWriteError as error:
+                # Busy past the wait limit, or an unusable lock (e.g. read-only
+                # store): name the marker. If the writer retired its marker
+                # meanwhile, its publication finished and the read proceeds.
+                markers = self._intent_markers()
+                if not markers:
+                    return
+                raise StoreReadError(
+                    self.path,
+                    f"publication marker {markers[0]} present and its lock is "
+                    f"unavailable ({error}); retry later, or follow README "
+                    "interrupted-publication recovery",
+                ) from error
+            return
+        marker = markers[0]
+        raise StoreReadError(
+            self.path,
+            f"unresolved publication; inspect {marker} and follow "
+            "README interrupted-publication recovery before retrying",
+        )
+
+    def _intent_markers(self):
+        markers = []
+        for name in (REFRESH_INTENT, AUDIO_INTENT):
+            marker = self.base_dir / name
+            if marker.exists() or marker.is_symlink():
+                markers.append(marker)
+        return markers
+
     def _fetch_all(self):
+        self._check_intents()
         data = self._read_bytes()
         if data is None:
             return {}
@@ -320,8 +411,13 @@ class JsonRepository:
     @contextmanager
     def _lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with advisory_lock(self.path.with_suffix(self.path.suffix + ".lock")):
-            yield
+        with advisory_lock(self._lock_path()):
+            self.__dict__["_lock_depth"] = self.__dict__.get("_lock_depth", 0) + 1
+            try:
+                self._check_intents()
+                yield
+            finally:
+                self.__dict__["_lock_depth"] -= 1
 
     def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
@@ -331,6 +427,28 @@ class JsonRepository:
                 f"Cannot write metadata {self.path}: size limit exceeded (16 MiB)"
             )
         return serialized
+
+    def _write_refresh_backup(self, backup, previous):
+        """Write the private rollback copy with the original episode file mode.
+
+        The caller syncs the backup directory before publishing its intent.
+        """
+        try:
+            mode = stat.S_IMODE(self.path.stat().st_mode)
+        except FileNotFoundError:
+            mode = None
+        descriptor = os.open(
+            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as output:
+                output.write(previous)
+                output.flush()
+                if mode is not None:
+                    os.fchmod(output.fileno(), mode)
+                os.fsync(output.fileno())
+        finally:
+            os.close(descriptor)
 
     def _write_models(self, locked):
         serialized = self._serialize_models(locked)
@@ -443,6 +561,17 @@ class EpisodeRepository(JsonRepository):
                         )
                     published = False
                     previous_moved = False
+                    intent = self.base_dir / AUDIO_INTENT
+                    write_intent(
+                        intent,
+                        {
+                            "kind": "audio",
+                            "metadata": str(self.path),
+                            "target": str(target),
+                            "stage": str(stage),
+                            "backup": str(backup) if backup is not None else None,
+                        },
+                    )
                     try:
                         if backup is not None:
                             os.replace(target, backup)
@@ -477,10 +606,15 @@ class EpisodeRepository(JsonRepository):
                                 rollback_failed = True
                         try:
                             sync_directory(self.base_dir)
-                        except OSError:
+                            if not rollback_failed:
+                                clear_intent(intent)
+                        except BaseException:
                             rollback_failed = True
                         raise
                     else:
+                        # The matching audio and JSON are both durable. A crash
+                        # after this point needs at most orphan-backup cleanup.
+                        clear_intent(intent)
                         if backup is not None:
                             try:
                                 backup.unlink()
@@ -578,18 +712,51 @@ class EpisodeRepository(JsonRepository):
             self._import_locked(models, self._fetch_all())
 
     @contextmanager
-    def subscription_import(self, models):
-        """Keep the episode generation owned until subscription publication settles."""
+    def subscription_import(self, models, podcasts_repo=None):
+        """Fence an interrupted pair until an operator settles its generations."""
         with self._lock():
             locked = self._fetch_all()
             previous = self._read_bytes()
-            backup = self.base_dir / f".pdcst-refresh-{uuid4().hex}.previous"
-            recovery = self.base_dir / f".pdcst-refresh-{uuid4().hex}.refreshed"
+            token = uuid4().hex
+            backup = self.base_dir / f".pdcst-refresh-{token}.previous"
+            recovery = self.base_dir / f".pdcst-refresh-{token}.refreshed"
+            marker = self.base_dir / REFRESH_INTENT
+            markers = [marker]
+            podcast_backup = None
+            podcast_previous = None
+            if podcasts_repo is not None:
+                podcast_previous = podcasts_repo._read_bytes()
+                podcast_backup = (
+                    podcasts_repo.base_dir / f".pdcst-refresh-{token}.previous"
+                )
+                markers.append(podcasts_repo.base_dir / REFRESH_INTENT)
             retain = False
             imported = False
             try:
                 if previous is not None:
                     self._write_refresh_backup(backup, previous)
+                if podcast_previous is not None:
+                    podcasts_repo._write_refresh_backup(
+                        podcast_backup, podcast_previous
+                    )
+                details = {
+                    "kind": "refresh",
+                    "episodes": str(self.path),
+                    "previous_episodes": str(backup) if previous is not None else None,
+                    "refreshed_episodes": str(recovery),
+                    "podcasts": str(podcasts_repo.path) if podcasts_repo else None,
+                    "previous_podcasts": (
+                        str(podcast_backup) if podcast_previous is not None else None
+                    ),
+                    "markers": [str(path) for path in markers],
+                }
+                # Backup directory entries must survive before either marker
+                # can authorize the first metadata replacement.
+                sync_directory(self.base_dir)
+                if podcasts_repo is not None:
+                    sync_directory(podcasts_repo.base_dir)
+                for path in markers:
+                    write_intent(path, details)
                 self._import_locked(models, locked)
                 imported = True
                 yield
@@ -597,12 +764,13 @@ class EpisodeRepository(JsonRepository):
                 episodes_unsynced = isinstance(error, PublicationDurabilityError)
                 if episodes_unsynced:
                     if error.path != self.path:
-                        # The subscription is visible too; retain the matching pair.
+                        # Subscription or intent visible with uncertain sync:
+                        # keep both generations and all recovery evidence.
+                        retain = True
                         raise
                     imported = True
                 if imported:
                     try:
-                        # Retain the new generation before attempting compensation.
                         os.link(self.path, recovery)
                         sync_directory(self.base_dir)
                         if previous is None:
@@ -615,13 +783,13 @@ class EpisodeRepository(JsonRepository):
                         warnings.warn(
                             "Refresh rollback incomplete; "
                             f"previous metadata at {backup} or {self.path}; "
-                            f"refreshed metadata at {self.path} or {recovery}",
+                            f"refreshed metadata at {self.path} or {recovery}; "
+                            f"recovery intent at {marker}",
                             RuntimeWarning,
                             stacklevel=2,
                         )
                     else:
                         if episodes_unsynced:
-                            # Nothing refreshed remains visible: do not report it.
                             raise StoreWriteError(
                                 f"Refresh of {self.path} could not be synced and "
                                 "was rolled back; previous episodes retained"
@@ -629,31 +797,25 @@ class EpisodeRepository(JsonRepository):
                 raise
             finally:
                 if not retain:
-                    backup.unlink(missing_ok=True)
-                    recovery.unlink(missing_ok=True)
-
-    def _write_refresh_backup(self, backup, previous):
-        """Write the private rollback copy with the original episode file mode.
-
-        The backup is internal: no directory sync is reported for it, since the
-        compensation path syncs the directory before relying on it.
-        """
-        try:
-            mode = stat.S_IMODE(self.path.stat().st_mode)
-        except FileNotFoundError:
-            mode = None
-        descriptor = os.open(
-            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-        )
-        try:
-            with os.fdopen(descriptor, "wb", closefd=False) as output:
-                output.write(previous)
-                output.flush()
-                if mode is not None:
-                    os.fchmod(output.fileno(), mode)
-                os.fsync(output.fileno())
-        finally:
-            os.close(descriptor)
+                    # Retire markers only after successful publication or a
+                    # synced rollback. Keep backups if marker retirement fails.
+                    pending_error = sys.exc_info()[0] is not None
+                    try:
+                        for path in markers:
+                            clear_intent(path)
+                    except BaseException:
+                        if not pending_error:
+                            raise
+                        warnings.warn(
+                            f"Refresh recovery cleanup incomplete; inspect {marker}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                    else:
+                        backup.unlink(missing_ok=True)
+                        recovery.unlink(missing_ok=True)
+                        if podcast_backup is not None:
+                            podcast_backup.unlink(missing_ok=True)
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb
@@ -797,23 +959,16 @@ class FeedParserRepository:
         # cause or context, including signed URLs in formatted tracebacks.
         raise FeedError(failure)
 
-    AUDIO_TYPES = {
-        "audio/mpeg",
-        "audio/mp3",
-        "audio/mp4",
-        "audio/aac",
-        "audio/x-m4a",
-        "audio/ogg",
-        "audio/opus",
-        "audio/wav",
-        "audio/x-wav",
-        "audio/flac",
-        "audio/x-flac",
-    }
-    AUDIO_SUFFIXES = {"mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"}
+    AUDIO_TYPES = frozenset(AUDIO_MIME_EXTENSIONS)
+    AUDIO_SUFFIXES = AUDIO_SUFFIXES
 
     @classmethod
     def audio_url(cls, entry):
+        """Keep the URL-only API while retaining types in parsed episodes."""
+        return cls.audio_enclosure(entry)[0]
+
+    @classmethod
+    def audio_enclosure(cls, entry):
         fallback = None
         for enclosure in entry.get("enclosures", []):
             href = enclosure.get("href")
@@ -829,12 +984,12 @@ class FeedParserRepository:
                 continue
             media_type = enclosure.get("type", "").split(";", 1)[0].strip().lower()
             if media_type in cls.AUDIO_TYPES:
-                return href
+                return href, media_type
             if (
                 not media_type
                 and url.path.lower().rsplit(".", 1)[-1] in cls.AUDIO_SUFFIXES
             ):
-                fallback = fallback or href
+                fallback = fallback or (href, None)
         if fallback:
             return fallback
         raise ValueError("No supported audio enclosure")
@@ -846,9 +1001,11 @@ class FeedParserRepository:
         skipped = 0
         for entry in entries:
             try:
+                audio_url, media_type = cls.audio_enclosure(entry)
                 episode = {
                     "guid": entry["id"],
-                    "audio_url": cls.audio_url(entry),
+                    "audio_url": audio_url,
+                    "audio_media_type": media_type,
                     "published": parsed_date(entry["published_parsed"]),
                     "title": entry["title"],
                 }

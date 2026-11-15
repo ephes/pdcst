@@ -67,6 +67,15 @@ are ignored). Explicit types outside the supported list are rejected, even with
 an audio extension. Enclosure URLs containing whitespace are rejected.
 Unusable entries are skipped with a warning reporting their count; valid sibling
 episodes remain available and receive contiguous chronological indices.
+The selected enclosure's supported type is retained as optional `audio_media_type`
+in episode JSON. Filename generation keeps recognized URL path suffixes stable
+(case insensitive, excluding query strings). Otherwise it uses this MIME mapping:
+MPEG/MP3 → `mp3`, MP4/x-m4a → `m4a`, AAC → `aac`, Ogg → `ogg`, Opus → `opus`,
+WAV/x-wav → `wav`, FLAC/x-flac → `flac` (all types have the `audio/` prefix).
+Thus an `audio/mpeg` enclosure at `/download` becomes an `.mp3` file. Old records
+without the field remain readable and retain their former filename fallback;
+refreshing the feed populates the field. Existing `audio_file` associations stay
+valid when only the type changes; existing bytes are not renamed on refresh.
 
 Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
@@ -351,6 +360,9 @@ download and feed lock descriptors must be regular files, opened
 without following symlinks and without blocking on special files. Their named
 inode is checked again after acquisition. Invalid locks raise a bounded
 `StoreWriteError`; move an invalid lock aside only when no commands are running.
+(A read that only waits for a publication marker's lock reports both cases as a
+`StoreReadError` naming the marker, with the `StoreWriteError` as its cause; see
+"Interrupted-publication recovery".)
 Lock contention waits at most 30 seconds per acquisition by default. Set
 `PDCST_LOCK_WAIT_SECONDS` to a positive finite duration in seconds to change
 that limit (including for feed and download claim locks). The wait uses a
@@ -408,3 +420,79 @@ newer one. Different feeds acquire independently and share the subscription
 lock only during publication. Lock order is feed, subscription, then episode;
 refresh never takes the download claim lock. Failed refreshes release the lock
 and can be retried. Do not remove `.feed-locks/` files while commands are running.
+
+Metadata reads compare the opened descriptor's device/inode, size and nanosecond
+modification/change timestamps after the bounded read. In-place rewrites are
+refused as a changed generation, including same-size rewrites. Atomic replacement
+can still return the coherent old descriptor (unlink-only change timestamps do
+not invalidate unchanged bytes). Retry after an external writer finishes.
+Stored episode indices must be JSON integers greater than zero; subscription
+counts must be JSON integers at least zero. Booleans, strings and fractional
+numbers are refused through the private schema error, without rewriting the store.
+
+### Interrupted-publication recovery
+
+Before publishing a refresh, pdcst syncs backups of both existing JSON stores and
+writes `.pdcst-refresh-intent.json` in the episode directory and the storage root.
+The intent names `episodes`, `previous_episodes`, `refreshed_episodes`, `podcasts`,
+`previous_podcasts` and both `markers`. A null previous path means that store did
+not exist. The refreshed generation is initially at `episodes`; a failed rollback
+may also retain it at `refreshed_episodes`. Markers retire only after both new
+stores are synced or compensation has restored the old generation and synced it.
+
+Before an audio replacement, `.pdcst-download-intent.json` records `metadata`,
+`target`, `stage` and `backup` in the episode directory. A null backup means no
+previous audio existed. It is synced before moving any old audio. Both audio and
+JSON are synced before retiring this intent. A completed transfer interrupted
+before intent creation is an unassociated reserved stage and cannot displace audio.
+
+An unresolved intent blocks reads and mutations of the affected repository,
+including episode listing and download; a refresh root marker also blocks
+subscription browsing and all subscriptions. The error names the marker. Writers publish
+and retire their markers while holding the owning store lock (the episode store
+lock for episode-directory markers, the subscription store lock for the root
+marker). A command that sees a marker waits for that lock, within the lock wait
+limit, and checks again: an in-progress publication only delays it, while a
+marker still present under the lock is unresolved. If the wait limit expires or
+the lock cannot be opened (for example a read-only store) while the marker is
+still present, the command fails with a `StoreReadError` that names the marker
+and the lock problem; retry once the writer finished. No
+automatic winner is inferred, even if the pair appears complete. Help remains
+available. Do not remove locks or retry with a different filename to bypass this
+conflict. A visible publication with uncertain durability retains its marker and
+backups too; an ordinary successful rollback clears the marker.
+
+Recovery is manual, with **all pdcst commands stopped**:
+
+1. Read the named intent as JSON and copy every existing named generation and
+   marker somewhere safe. Missing paths can be expected after a rename; inspect
+   the other named locations. Never discard a generation merely because its name
+   says `previous`, `stage` or `refreshed`.
+2. For refresh, choose a coherent pair. To restore the old pair, copy
+   `previous_episodes` to `episodes` and `previous_podcasts` to `podcasts`; when a
+   previous path is null, restore that store's absence. Alternatively retain the
+   refreshed episodes and correct/verify the matching subscription directory,
+   metadata and episode count in `podcasts`. Keep all alternative copies until
+   that pair is verified. Do not restore only old episodes against a new count.
+3. For audio, move any completed bytes at `target` to a spare reserved
+   `.pdcst-download-*` path before restoring old audio from `backup` to `target`.
+   Keep `stage` intact. If `backup` is null, restore the previous target absence.
+   Verify the `audio_file` association in `metadata`. Alternatively retain the new
+   audio only after verifying its enclosure and matching metadata yourself.
+4. Flush restored files and sync their containing directories. Only then remove
+   every listed refresh marker (or the audio marker) and sync those directories.
+   Retry browsing before any new refresh/download. Retained recovery generations
+   can be retired manually after verifying the chosen pair.
+
+This detects process interruption; it does not make multi-file publication atomic
+or choose a generation after power loss. Once an intent has been durably retired,
+a leftover backup only needs manual cleanup; it does not block normal startup.
+
+`tests/test_interrupted_publication.py` kills real CLI subprocesses at publication
+barriers, using temporary stores and fake feed/transfer functions. The paired
+process tests in `tests/test_download_process_ownership.py` kill a transfer owner,
+observe a waiting successor acquire the released kernel claim, update metadata
+under its normal JSON lock, and prove that the successor refuses a stale enclosure
+or a destination newly owned by another GUID before transfer. A fresh selection
+then succeeds; unassociated partial stages remain reserved for manual cleanup.
+All child processes are terminated and reaped, including on test failure.

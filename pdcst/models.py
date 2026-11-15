@@ -19,6 +19,22 @@ INDEX_SPEC = _ALIGN + r"[+\- ]?#?0?[0-9]{0,3}[,_]?[bdoxXn]?"
 TEXT_SPEC = _ALIGN + r"(?:[1-9][0-9]{0,2})?(?:\.[0-9]{1,3})?s?"
 
 
+AUDIO_MIME_EXTENSIONS = {
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/x-m4a": "m4a",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+}
+AUDIO_SUFFIXES = frozenset(AUDIO_MIME_EXTENSIONS.values()) | {"oga"}
+
+
 class FilenamePatternError(ValueError):
     """A pattern cannot produce a supported single filename."""
 
@@ -114,11 +130,19 @@ class Podcast:
         """
         Use the file_name_pattern to build a name for episodes audio files.
         """
+        path = urlsplit(episode.audio_url).path
+        _, separator, suffix = path.rsplit("/", 1)[-1].rpartition(".")
+        suffix = suffix.lower() if separator else ""
+        file_format = (
+            suffix
+            if suffix in AUDIO_SUFFIXES
+            else AUDIO_MIME_EXTENSIONS.get(episode.audio_media_type)
+        )
+        if file_format is None:
+            # Preserve legacy records' filename behavior when no type was stored.
+            file_format = self.title_for_filename(path.rsplit(".", 1)[-1])
         details = {
-            # FIXME proper suffix from path? Or take info about format from feed?
-            "file_format": self.title_for_filename(
-                urlsplit(episode.audio_url).path.rsplit(".", 1)[-1]
-            ),
+            "file_format": file_format,
             "index": episode.index,
             "title": self.title_for_filename(episode.title),
         }
@@ -196,6 +220,7 @@ class Episode:
         title,
         podcast=None,
         audio_file=None,
+        audio_media_type=None,
     ):
         self.podcast = podcast
         self.index = index
@@ -204,6 +229,7 @@ class Episode:
         self.published = published
         self.title = title
         self.audio_file = audio_file
+        self.audio_media_type = audio_media_type
 
     @classmethod
     def from_dict(cls, episode):
@@ -228,6 +254,7 @@ class Episode:
             "published": self.published,
             "title": self.title,
             "audio_file": self.audio_file,
+            "audio_media_type": self.audio_media_type,
         }
 
     @property

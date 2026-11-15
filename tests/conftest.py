@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from pdcst.models import Episode, Feed, Podcast
+from pdcst.repository import EpisodeRepository, PodcastRepository
 
 
 @pytest.fixture
@@ -28,3 +29,14 @@ def episode(podcast):
         "title": "Refactoring",
     }
     return Episode.from_dict(attributes)
+
+
+@pytest.fixture
+def publication_store(tmp_path, podcast, episode):
+    podcast.file_name_pattern = "saved.mp3"
+    episode.audio_file = "saved.mp3"
+    PodcastRepository(tmp_path).add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episodes.add(episode)
+    (episodes.base_dir / "saved.mp3").write_bytes(b"previous audio")
+    return tmp_path, episodes
