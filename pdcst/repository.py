@@ -32,7 +32,7 @@ from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
 from pydantic import BaseModel, ValidationError, conint, parse_obj_as, validator
 
 from .config import settings
-from .models import Episode, Podcast
+from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
 from .storage import PublicationDurabilityError, replacement_file, sync_directory
 
 STORE_MAX_BYTES = 16 * 1024**2
@@ -217,6 +217,13 @@ class EpisodeInDb(BaseModel):
     published: datetime
     title: str
     audio_file: str | None
+    audio_media_type: str | None = None
+
+    @validator("audio_media_type")
+    def supported_media_type(cls, value):
+        if value is not None and value not in AUDIO_MIME_EXTENSIONS:
+            raise ValueError("unsupported audio media type")
+        return value
 
     _utc_published = validator("published", allow_reuse=True)(as_utc)
 
@@ -911,23 +918,16 @@ class FeedParserRepository:
         # cause or context, including signed URLs in formatted tracebacks.
         raise FeedError(failure)
 
-    AUDIO_TYPES = {
-        "audio/mpeg",
-        "audio/mp3",
-        "audio/mp4",
-        "audio/aac",
-        "audio/x-m4a",
-        "audio/ogg",
-        "audio/opus",
-        "audio/wav",
-        "audio/x-wav",
-        "audio/flac",
-        "audio/x-flac",
-    }
-    AUDIO_SUFFIXES = {"mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"}
+    AUDIO_TYPES = frozenset(AUDIO_MIME_EXTENSIONS)
+    AUDIO_SUFFIXES = AUDIO_SUFFIXES
 
     @classmethod
     def audio_url(cls, entry):
+        """Keep the URL-only API while retaining types in parsed episodes."""
+        return cls.audio_enclosure(entry)[0]
+
+    @classmethod
+    def audio_enclosure(cls, entry):
         fallback = None
         for enclosure in entry.get("enclosures", []):
             href = enclosure.get("href")
@@ -943,12 +943,12 @@ class FeedParserRepository:
                 continue
             media_type = enclosure.get("type", "").split(";", 1)[0].strip().lower()
             if media_type in cls.AUDIO_TYPES:
-                return href
+                return href, media_type
             if (
                 not media_type
                 and url.path.lower().rsplit(".", 1)[-1] in cls.AUDIO_SUFFIXES
             ):
-                fallback = fallback or href
+                fallback = fallback or (href, None)
         if fallback:
             return fallback
         raise ValueError("No supported audio enclosure")
@@ -960,9 +960,11 @@ class FeedParserRepository:
         skipped = 0
         for entry in entries:
             try:
+                audio_url, media_type = cls.audio_enclosure(entry)
                 episode = {
                     "guid": entry["id"],
-                    "audio_url": cls.audio_url(entry),
+                    "audio_url": audio_url,
+                    "audio_media_type": media_type,
                     "published": parsed_date(entry["published_parsed"]),
                     "title": entry["title"],
                 }

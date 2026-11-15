@@ -67,6 +67,15 @@ are ignored). Explicit types outside the supported list are rejected, even with
 an audio extension. Enclosure URLs containing whitespace are rejected.
 Unusable entries are skipped with a warning reporting their count; valid sibling
 episodes remain available and receive contiguous chronological indices.
+The selected enclosure's supported type is retained as optional `audio_media_type`
+in episode JSON. Filename generation keeps recognized URL path suffixes stable
+(case insensitive, excluding query strings). Otherwise it uses this MIME mapping:
+MPEG/MP3 → `mp3`, MP4/x-m4a → `m4a`, AAC → `aac`, Ogg → `ogg`, Opus → `opus`,
+WAV/x-wav → `wav`, FLAC/x-flac → `flac` (all types have the `audio/` prefix).
+Thus an `audio/mpeg` enclosure at `/download` becomes an `.mp3` file. Old records
+without the field remain readable and retain their former filename fallback;
+refreshing the feed populates the field. Existing `audio_file` associations stay
+valid when only the type changes; existing bytes are not renamed on refresh.
 
 Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
@@ -467,3 +476,12 @@ Recovery is manual, with **all pdcst commands stopped**:
 This detects process interruption; it does not make multi-file publication atomic
 or choose a generation after power loss. Once an intent has been durably retired,
 a leftover backup only needs manual cleanup; it does not block normal startup.
+
+`tests/test_interrupted_publication.py` kills real CLI subprocesses at publication
+barriers, using temporary stores and fake feed/transfer functions. The paired
+process tests in `tests/test_download_process_ownership.py` kill a transfer owner,
+observe a waiting successor acquire the released kernel claim, update metadata
+under its normal JSON lock, and prove that the successor refuses a stale enclosure
+or a destination newly owned by another GUID before transfer. A fresh selection
+then succeeds; unassociated partial stages remain reserved for manual cleanup.
+All child processes are terminated and reaped, including on test failure.

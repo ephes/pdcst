@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import pdcst
-from pdcst.repository import EpisodeRepository, PodcastRepository
+from pdcst.repository import PodcastRepository
 
 
 def cli_process(home, script, *args):
@@ -68,17 +68,6 @@ def run_cli(home, *args):
         if process.poll() is None:
             process.kill()
             process.communicate(timeout=5)
-
-
-@pytest.fixture
-def publication_store(tmp_path, podcast, episode):
-    podcast.file_name_pattern = "saved.mp3"
-    episode.audio_file = "saved.mp3"
-    PodcastRepository(tmp_path).add(podcast)
-    episodes = EpisodeRepository(tmp_path / podcast.directory)
-    episodes.add(episode)
-    (episodes.base_dir / "saved.mp3").write_bytes(b"previous audio")
-    return tmp_path, episodes
 
 
 REFRESH = """
