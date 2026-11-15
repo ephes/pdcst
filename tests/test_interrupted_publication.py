@@ -216,3 +216,115 @@ def test_refresh_cleanup_failure_preserves_primary(publication_store, monkeypatc
     assert raised.value is primary
     assert list(home.rglob(".pdcst-refresh-intent.json"))
     assert list(home.rglob("*.previous"))
+
+
+NO_NETWORK = (
+    "import pdcst; pdcst.FeedParserRepository.fetch_document = "
+    "lambda *_: (_ for _ in ()).throw(AssertionError('no network')); pdcst.cli()"
+)
+
+
+@pytest.mark.parametrize("script", [REFRESH, AUDIO], ids=["refresh", "audio"])
+def test_readers_wait_for_in_progress_publication(publication_store, script):
+    # The writer pauses while it holds the store locks with its intents present:
+    # readers and other feeds wait for it instead of reporting an interruption.
+    home, _ = publication_store
+    with paused_cli(home, script, "interrupted") as writer:
+        wait_barrier(writer, home / "ready")
+        assert list(home.rglob("*intent.json"))
+        (home / "ready").unlink()
+        readers = [
+            cli_process(home, NO_NETWORK, *command)
+            for command in [
+                ("podcasts",),
+                ("episodes", "python"),
+                ("add", "https://example.test/other-feed"),
+            ]
+        ]
+        time.sleep(0.5)
+        # The episode store holds a marker in both cases; podcasts only for refresh.
+        assert readers[1].poll() is None, "episode reader must wait for the writer"
+        writer.stdin.write("\n")
+        writer.stdin.flush()
+        wait_barrier(writer, home / "ready")
+        outputs = []
+        for reader in readers:
+            out, err = reader.communicate(timeout=20)
+            outputs.append((reader.returncode, out + err))
+    assert not list(home.rglob("*intent.json"))
+    for code, output in outputs[:2]:
+        assert code == 0, output
+    code, output = outputs[2]
+    # The other feed got past the intent check and reached its (stubbed) fetch.
+    assert "unresolved publication" not in output and "no network" in output
+
+
+def test_concurrent_readers_never_bypass_an_unresolved_marker(publication_store):
+    home, episodes = publication_store
+    with paused_cli(home, AUDIO, "interrupted") as writer:
+        wait_barrier(writer, home / "ready")
+        writer.kill()
+        writer.wait(timeout=5)
+    readers = [cli_process(home, NO_NETWORK, "episodes", "python") for _ in range(6)]
+    for reader in readers:
+        out, err = reader.communicate(timeout=20)
+        assert reader.returncode != 0
+        assert "unresolved publication" in out + err
+
+
+def test_reader_reports_marker_when_its_lock_is_busy(publication_store):
+    home, _ = publication_store
+    with paused_cli(home, AUDIO, "interrupted") as writer:
+        wait_barrier(writer, home / "ready")
+        reader = subprocess.run(
+            [sys.executable, "-c", NO_NETWORK, "episodes", "python"],
+            cwd=home,
+            env=dict(
+                os.environ,
+                PDCST_HOME=str(home),
+                PDCST_LOCK_WAIT_SECONDS="0.2",
+                PYTHONPATH=str(Path(pdcst.__file__).resolve().parent.parent),
+                NO_COLOR="1",
+                COLUMNS="240",
+            ),
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        writer.kill()
+        writer.wait(timeout=5)
+    output = reader.stdout + reader.stderr
+    assert reader.returncode != 0
+    assert ".pdcst-download-intent.json" in output and "busy" in output
+    assert "Traceback" not in output
+
+
+def test_reader_reports_marker_when_its_lock_cannot_be_opened(publication_store):
+    home, episodes = publication_store
+    (episodes.base_dir / ".pdcst-download-intent.json").write_text("{}")
+    lock = episodes.path.with_suffix(episodes.path.suffix + ".lock")
+    lock.unlink(missing_ok=True)
+    lock.mkdir()
+    code, output = run_cli(home, "episodes", "python")
+    assert code != 0
+    assert ".pdcst-download-intent.json" in output and "lock is unavailable" in output
+    assert "Traceback" not in output
+
+
+def test_marker_retired_during_lock_failure_lets_the_read_proceed(
+    publication_store, monkeypatch
+):
+    from pdcst import repository
+
+    home, episodes = publication_store
+    marker = episodes.base_dir / repository.AUDIO_INTENT
+    marker.write_text("{}")
+
+    @contextmanager
+    def busy(path):
+        marker.unlink()  # the writer finishes just as the reader's wait expires
+        raise repository.StoreWriteError(f"Cannot acquire lock {path}: busy")
+        yield
+
+    monkeypatch.setattr(repository, "advisory_lock", busy)
+    assert [episode.guid for episode in episodes.list()]

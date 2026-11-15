@@ -321,15 +321,52 @@ class JsonRepository:
             raise StoreReadError(self.path, "filesystem error") from None
         return data
 
+    def _lock_path(self):
+        return self.path.with_suffix(self.path.suffix + ".lock")
+
     def _check_intents(self):
+        """Refuse a marker left by an interrupted publication.
+
+        Writers publish and retire intents while holding this store's lock. An
+        unlocked reader that sees a marker therefore waits (bounded by the lock
+        wait limit) for that lock and re-checks: a live publication has retired
+        its marker by then, and a marker still present is unresolved.
+        """
+        markers = self._intent_markers()
+        if not markers:
+            return
+        if not self.__dict__.get("_lock_depth"):
+            try:
+                with self._lock():
+                    pass
+            except StoreWriteError as error:
+                # Busy past the wait limit, or an unusable lock (e.g. read-only
+                # store): name the marker. If the writer retired its marker
+                # meanwhile, its publication finished and the read proceeds.
+                markers = self._intent_markers()
+                if not markers:
+                    return
+                raise StoreReadError(
+                    self.path,
+                    f"publication marker {markers[0]} present and its lock is "
+                    f"unavailable ({error}); retry later, or follow README "
+                    "interrupted-publication recovery",
+                ) from error
+            return
+        marker = markers[0]
+        raise StoreReadError(
+            self.path,
+            f"unresolved publication; inspect {marker} and follow "
+            "README interrupted-publication recovery before retrying",
+        )
+
+    def _intent_markers(self):
+        markers = []
         for name in (REFRESH_INTENT, AUDIO_INTENT):
             marker = self.base_dir / name
             if marker.exists() or marker.is_symlink():
-                raise StoreReadError(
-                    self.path,
-                    f"unresolved publication; inspect {marker} and follow "
-                    "README interrupted-publication recovery before retrying",
-                )
+                markers.append(marker)
+        return markers
 
     def _fetch_all(self):
         self._check_intents()
@@ -374,9 +411,13 @@ class JsonRepository:
     @contextmanager
     def _lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with advisory_lock(self.path.with_suffix(self.path.suffix + ".lock")):
-            self._check_intents()
-            yield
+        with advisory_lock(self._lock_path()):
+            self.__dict__["_lock_depth"] = self.__dict__.get("_lock_depth", 0) + 1
+            try:
+                self._check_intents()
+                yield
+            finally:
+                self.__dict__["_lock_depth"] -= 1
 
     def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))

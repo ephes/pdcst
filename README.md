@@ -360,6 +360,9 @@ download and feed lock descriptors must be regular files, opened
 without following symlinks and without blocking on special files. Their named
 inode is checked again after acquisition. Invalid locks raise a bounded
 `StoreWriteError`; move an invalid lock aside only when no commands are running.
+(A read that only waits for a publication marker's lock reports both cases as a
+`StoreReadError` naming the marker, with the `StoreWriteError` as its cause; see
+"Interrupted-publication recovery".)
 Lock contention waits at most 30 seconds per acquisition by default. Set
 `PDCST_LOCK_WAIT_SECONDS` to a positive finite duration in seconds to change
 that limit (including for feed and download claim locks). The wait uses a
@@ -445,7 +448,15 @@ before intent creation is an unassociated reserved stage and cannot displace aud
 
 An unresolved intent blocks reads and mutations of the affected repository,
 including episode listing and download; a refresh root marker also blocks
-subscription browsing and all subscriptions. The error names the marker. No
+subscription browsing and all subscriptions. The error names the marker. Writers publish
+and retire their markers while holding the owning store lock (the episode store
+lock for episode-directory markers, the subscription store lock for the root
+marker). A command that sees a marker waits for that lock, within the lock wait
+limit, and checks again: an in-progress publication only delays it, while a
+marker still present under the lock is unresolved. If the wait limit expires or
+the lock cannot be opened (for example a read-only store) while the marker is
+still present, the command fails with a `StoreReadError` that names the marker
+and the lock problem; retry once the writer finished. No
 automatic winner is inferred, even if the pair appears complete. Help remains
 available. Do not remove locks or retry with a different filename to bypass this
 conflict. A visible publication with uncertain durability retains its marker and
