@@ -487,7 +487,9 @@ def test_secondary_rollback_failure_preserves_primary_and_bytes(
         completed = target
     else:
         (completed,) = (
-            p for p in repo.base_dir.glob(".pdcst-download-*") if p != backup
+            p
+            for p in repo.base_dir.glob(".pdcst-download-*")
+            if p != backup and not p.name.endswith("intent.json")
         )
         assert not target.exists()
     assert completed.read_bytes() == b"synthetic audio"
@@ -501,6 +503,14 @@ def test_secondary_rollback_failure_preserves_primary_and_bytes(
         recovery = repo.base_dir / ".pdcst-download-manual"
         completed.rename(recovery)
         completed = recovery
+    with pytest.raises(typer.BadParameter, match="unresolved publication"):
+        pdcst.download("show", "first")
+    # Follow the explicit recovery contract: restore the previous association,
+    # then retire the marker after verifying both generations.
+    import shutil
+
+    shutil.copyfile(backup, target)
+    (repo.base_dir / ".pdcst-download-intent.json").unlink()
     pdcst.download("show", "first")
     assert len(calls) == 2
     assert backup.read_bytes() == b"previous audio"

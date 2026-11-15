@@ -61,6 +61,7 @@ def subscribe(
         fp_repo = FeedParserRepository()
     if podcasts_repo is None:
         podcasts_repo = PodcastRepository(settings.root)
+    podcasts_repo._check_intents()
     with podcasts_repo.feed_lock(feed_url):
         return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo)
 
@@ -125,7 +126,9 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
         locked[stored.pk] = stored
         podcasts_repo._serialize_models(locked)
         # Import under the episode lock before publishing its subscription pointer.
-        with EpisodeRepository(episode_dir).subscription_import(episodes):
+        with EpisodeRepository(episode_dir).subscription_import(
+            episodes, podcasts_repo
+        ):
             podcasts_repo._write_models(locked)
     return podcast
 

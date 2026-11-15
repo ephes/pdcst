@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import sys
 import time
 import unicodedata
 import warnings
@@ -93,6 +94,24 @@ class StoreReadError(ValueError):
 
 class StoreWriteError(ValueError):
     """Metadata cannot be safely written or its advisory lock admitted."""
+
+
+REFRESH_INTENT = ".pdcst-refresh-intent.json"
+AUDIO_INTENT = ".pdcst-download-intent.json"
+
+
+def write_intent(path, details):
+    """Durably record recovery paths before publishing any affected generation."""
+    with replacement_file(path, binary=True) as output:
+        output.write(json.dumps(details).encode("utf-8"))
+
+
+def clear_intent(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    sync_directory(path.parent)
 
 
 @contextmanager
@@ -295,7 +314,18 @@ class JsonRepository:
             raise StoreReadError(self.path, "filesystem error") from None
         return data
 
+    def _check_intents(self):
+        for name in (REFRESH_INTENT, AUDIO_INTENT):
+            marker = self.base_dir / name
+            if marker.exists() or marker.is_symlink():
+                raise StoreReadError(
+                    self.path,
+                    f"unresolved publication; inspect {marker} and follow "
+                    "README interrupted-publication recovery before retrying",
+                )
+
     def _fetch_all(self):
+        self._check_intents()
         data = self._read_bytes()
         if data is None:
             return {}
@@ -338,6 +368,7 @@ class JsonRepository:
     def _lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with advisory_lock(self.path.with_suffix(self.path.suffix + ".lock")):
+            self._check_intents()
             yield
 
     def _serialize_models(self, locked):
@@ -348,6 +379,28 @@ class JsonRepository:
                 f"Cannot write metadata {self.path}: size limit exceeded (16 MiB)"
             )
         return serialized
+
+    def _write_refresh_backup(self, backup, previous):
+        """Write the private rollback copy with the original episode file mode.
+
+        The caller syncs the backup directory before publishing its intent.
+        """
+        try:
+            mode = stat.S_IMODE(self.path.stat().st_mode)
+        except FileNotFoundError:
+            mode = None
+        descriptor = os.open(
+            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as output:
+                output.write(previous)
+                output.flush()
+                if mode is not None:
+                    os.fchmod(output.fileno(), mode)
+                os.fsync(output.fileno())
+        finally:
+            os.close(descriptor)
 
     def _write_models(self, locked):
         serialized = self._serialize_models(locked)
@@ -460,6 +513,17 @@ class EpisodeRepository(JsonRepository):
                         )
                     published = False
                     previous_moved = False
+                    intent = self.base_dir / AUDIO_INTENT
+                    write_intent(
+                        intent,
+                        {
+                            "kind": "audio",
+                            "metadata": str(self.path),
+                            "target": str(target),
+                            "stage": str(stage),
+                            "backup": str(backup) if backup is not None else None,
+                        },
+                    )
                     try:
                         if backup is not None:
                             os.replace(target, backup)
@@ -494,10 +558,15 @@ class EpisodeRepository(JsonRepository):
                                 rollback_failed = True
                         try:
                             sync_directory(self.base_dir)
-                        except OSError:
+                            if not rollback_failed:
+                                clear_intent(intent)
+                        except BaseException:
                             rollback_failed = True
                         raise
                     else:
+                        # The matching audio and JSON are both durable. A crash
+                        # after this point needs at most orphan-backup cleanup.
+                        clear_intent(intent)
                         if backup is not None:
                             try:
                                 backup.unlink()
@@ -595,18 +664,51 @@ class EpisodeRepository(JsonRepository):
             self._import_locked(models, self._fetch_all())
 
     @contextmanager
-    def subscription_import(self, models):
-        """Keep the episode generation owned until subscription publication settles."""
+    def subscription_import(self, models, podcasts_repo=None):
+        """Fence an interrupted pair until an operator settles its generations."""
         with self._lock():
             locked = self._fetch_all()
             previous = self._read_bytes()
-            backup = self.base_dir / f".pdcst-refresh-{uuid4().hex}.previous"
-            recovery = self.base_dir / f".pdcst-refresh-{uuid4().hex}.refreshed"
+            token = uuid4().hex
+            backup = self.base_dir / f".pdcst-refresh-{token}.previous"
+            recovery = self.base_dir / f".pdcst-refresh-{token}.refreshed"
+            marker = self.base_dir / REFRESH_INTENT
+            markers = [marker]
+            podcast_backup = None
+            podcast_previous = None
+            if podcasts_repo is not None:
+                podcast_previous = podcasts_repo._read_bytes()
+                podcast_backup = (
+                    podcasts_repo.base_dir / f".pdcst-refresh-{token}.previous"
+                )
+                markers.append(podcasts_repo.base_dir / REFRESH_INTENT)
             retain = False
             imported = False
             try:
                 if previous is not None:
                     self._write_refresh_backup(backup, previous)
+                if podcast_previous is not None:
+                    podcasts_repo._write_refresh_backup(
+                        podcast_backup, podcast_previous
+                    )
+                details = {
+                    "kind": "refresh",
+                    "episodes": str(self.path),
+                    "previous_episodes": str(backup) if previous is not None else None,
+                    "refreshed_episodes": str(recovery),
+                    "podcasts": str(podcasts_repo.path) if podcasts_repo else None,
+                    "previous_podcasts": (
+                        str(podcast_backup) if podcast_previous is not None else None
+                    ),
+                    "markers": [str(path) for path in markers],
+                }
+                # Backup directory entries must survive before either marker
+                # can authorize the first metadata replacement.
+                sync_directory(self.base_dir)
+                if podcasts_repo is not None:
+                    sync_directory(podcasts_repo.base_dir)
+                for path in markers:
+                    write_intent(path, details)
                 self._import_locked(models, locked)
                 imported = True
                 yield
@@ -614,12 +716,13 @@ class EpisodeRepository(JsonRepository):
                 episodes_unsynced = isinstance(error, PublicationDurabilityError)
                 if episodes_unsynced:
                     if error.path != self.path:
-                        # The subscription is visible too; retain the matching pair.
+                        # Subscription or intent visible with uncertain sync:
+                        # keep both generations and all recovery evidence.
+                        retain = True
                         raise
                     imported = True
                 if imported:
                     try:
-                        # Retain the new generation before attempting compensation.
                         os.link(self.path, recovery)
                         sync_directory(self.base_dir)
                         if previous is None:
@@ -632,13 +735,13 @@ class EpisodeRepository(JsonRepository):
                         warnings.warn(
                             "Refresh rollback incomplete; "
                             f"previous metadata at {backup} or {self.path}; "
-                            f"refreshed metadata at {self.path} or {recovery}",
+                            f"refreshed metadata at {self.path} or {recovery}; "
+                            f"recovery intent at {marker}",
                             RuntimeWarning,
                             stacklevel=2,
                         )
                     else:
                         if episodes_unsynced:
-                            # Nothing refreshed remains visible: do not report it.
                             raise StoreWriteError(
                                 f"Refresh of {self.path} could not be synced and "
                                 "was rolled back; previous episodes retained"
@@ -646,31 +749,25 @@ class EpisodeRepository(JsonRepository):
                 raise
             finally:
                 if not retain:
-                    backup.unlink(missing_ok=True)
-                    recovery.unlink(missing_ok=True)
-
-    def _write_refresh_backup(self, backup, previous):
-        """Write the private rollback copy with the original episode file mode.
-
-        The backup is internal: no directory sync is reported for it, since the
-        compensation path syncs the directory before relying on it.
-        """
-        try:
-            mode = stat.S_IMODE(self.path.stat().st_mode)
-        except FileNotFoundError:
-            mode = None
-        descriptor = os.open(
-            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-        )
-        try:
-            with os.fdopen(descriptor, "wb", closefd=False) as output:
-                output.write(previous)
-                output.flush()
-                if mode is not None:
-                    os.fchmod(output.fileno(), mode)
-                os.fsync(output.fileno())
-        finally:
-            os.close(descriptor)
+                    # Retire markers only after successful publication or a
+                    # synced rollback. Keep backups if marker retirement fails.
+                    pending_error = sys.exc_info()[0] is not None
+                    try:
+                        for path in markers:
+                            clear_intent(path)
+                    except BaseException:
+                        if not pending_error:
+                            raise
+                        warnings.warn(
+                            f"Refresh recovery cleanup incomplete; inspect {marker}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                    else:
+                        backup.unlink(missing_ok=True)
+                        recovery.unlink(missing_ok=True)
+                        if podcast_backup is not None:
+                            podcast_backup.unlink(missing_ok=True)
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb

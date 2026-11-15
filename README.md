@@ -417,3 +417,53 @@ not invalidate unchanged bytes). Retry after an external writer finishes.
 Stored episode indices must be JSON integers greater than zero; subscription
 counts must be JSON integers at least zero. Booleans, strings and fractional
 numbers are refused through the private schema error, without rewriting the store.
+
+### Interrupted-publication recovery
+
+Before publishing a refresh, pdcst syncs backups of both existing JSON stores and
+writes `.pdcst-refresh-intent.json` in the episode directory and the storage root.
+The intent names `episodes`, `previous_episodes`, `refreshed_episodes`, `podcasts`,
+`previous_podcasts` and both `markers`. A null previous path means that store did
+not exist. The refreshed generation is initially at `episodes`; a failed rollback
+may also retain it at `refreshed_episodes`. Markers retire only after both new
+stores are synced or compensation has restored the old generation and synced it.
+
+Before an audio replacement, `.pdcst-download-intent.json` records `metadata`,
+`target`, `stage` and `backup` in the episode directory. A null backup means no
+previous audio existed. It is synced before moving any old audio. Both audio and
+JSON are synced before retiring this intent. A completed transfer interrupted
+before intent creation is an unassociated reserved stage and cannot displace audio.
+
+An unresolved intent blocks reads and mutations of the affected repository,
+including episode listing and download; a refresh root marker also blocks
+subscription browsing and all subscriptions. The error names the marker. No
+automatic winner is inferred, even if the pair appears complete. Help remains
+available. Do not remove locks or retry with a different filename to bypass this
+conflict. A visible publication with uncertain durability retains its marker and
+backups too; an ordinary successful rollback clears the marker.
+
+Recovery is manual, with **all pdcst commands stopped**:
+
+1. Read the named intent as JSON and copy every existing named generation and
+   marker somewhere safe. Missing paths can be expected after a rename; inspect
+   the other named locations. Never discard a generation merely because its name
+   says `previous`, `stage` or `refreshed`.
+2. For refresh, choose a coherent pair. To restore the old pair, copy
+   `previous_episodes` to `episodes` and `previous_podcasts` to `podcasts`; when a
+   previous path is null, restore that store's absence. Alternatively retain the
+   refreshed episodes and correct/verify the matching subscription directory,
+   metadata and episode count in `podcasts`. Keep all alternative copies until
+   that pair is verified. Do not restore only old episodes against a new count.
+3. For audio, move any completed bytes at `target` to a spare reserved
+   `.pdcst-download-*` path before restoring old audio from `backup` to `target`.
+   Keep `stage` intact. If `backup` is null, restore the previous target absence.
+   Verify the `audio_file` association in `metadata`. Alternatively retain the new
+   audio only after verifying its enclosure and matching metadata yourself.
+4. Flush restored files and sync their containing directories. Only then remove
+   every listed refresh marker (or the audio marker) and sync those directories.
+   Retry browsing before any new refresh/download. Retained recovery generations
+   can be retired manually after verifying the chosen pair.
+
+This detects process interruption; it does not make multi-file publication atomic
+or choose a generation after power loss. Once an intent has been durably retired,
+a leftover backup only needs manual cleanup; it does not block normal startup.
