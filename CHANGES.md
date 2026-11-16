@@ -1,5 +1,13 @@
 # Unreleased
 
+* Require regular, non-symlink owned audio destinations before transfer and
+  publication; refuse changed generations without moving special entries.
+* Independently admit completed transfer stages through a bounded, nonempty
+  regular descriptor and matching named generation before audio publication.
+  Recheck at publication, copy permissions through the descriptor, and preserve
+  previous audio/metadata on callback contract violations. Never traverse or
+  remove a directory substituted for a stage.
+
 * Reject metadata changed in place during reads while preserving coherent atomic
   replacement reads.
 * Require strict positive stored episode indices and nonnegative integer counts.

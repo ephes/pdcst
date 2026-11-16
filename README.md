@@ -310,8 +310,30 @@ or changing download associations. Filename comparisons conservatively ignore ca
 and normalize Unicode on all hosts. Repository filenames and symlink destinations
 (including loops) are refused. Unsafe sibling associations do not block unrelated
 downloads. A same-GUID
-refresh of its associated file is allowed. Use a distinct filename pattern (for
+refresh of its associated file is allowed only when the existing destination is a
+regular file without a symlink. Restored metadata cannot authorize moving a
+directory, FIFO, device or other special entry aside. This is checked before
+transfer and again during publication; an invalid destination leaves its entry
+and metadata untouched, without creating a publication intent. A destination
+generation that changes after the intent is written is also refused before old
+audio is moved, and the unused intent is retired.
+Use a distinct filename pattern (for
 example, one including `{index}`) to resolve episode name collisions.
+
+The repository also validates the transfer callback's result independently of the
+HTTP helper. Returning without writing, leaving an empty or missing stage, or
+substituting a symlink/special file is a download conflict. A completed stage must
+be a regular file with 1 through `PDCST_AUDIO_MAX_BYTES` bytes. A nonblocking,
+no-follow descriptor remains open through publication; its device/inode, size and
+nanosecond modification/change timestamps must match the named file. These
+checks run before recording intent and again before moving audio. Mode copying
+uses that descriptor, so it cannot chmod a substituted symlink's target. A changed
+stage is refused while preserving the previous audio and metadata. Ordinary
+invalid stages are removed; a directory substituted at the reserved stage path
+is left intact for manual inspection and is never traversed or removed. These
+checks detect changes at admission/publication boundaries; they assume local
+processes do not replace entries after the final check or change directory
+symlinks during the command. They do not validate audio codecs.
 
 Downloads commit only the local filename against the current GUID and captured
 enclosure URL, preserving newer titles, dates and indices. If the episode disappears

@@ -477,6 +477,50 @@ class EpisodeRepository(JsonRepository):
     Store episodes metadata and audio files for a podcast.
     """
 
+    @staticmethod
+    def _audio_generation(info):
+        if info is None:
+            return None
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+
+    def _audio_stage_info(self, stage, descriptor):
+        """Admit bounded completed bytes through a nonblocking, no-follow fd."""
+        try:
+            info = os.fstat(descriptor)
+            named = stage.lstat()
+        except OSError:
+            raise DownloadConflict(
+                "Audio stage unavailable or generation changed"
+            ) from None
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or not 0 < info.st_size <= settings.audio_max_bytes
+        ):
+            raise DownloadConflict(
+                "Audio stage must be a nonempty regular file within the audio byte limit"
+            )
+        if self._audio_generation(info) != self._audio_generation(named):
+            raise DownloadConflict("Audio stage generation changed")
+        return info
+
+    @staticmethod
+    def _audio_destination_info(target):
+        """An existing owned destination must be a regular, non-link file."""
+        try:
+            info = target.lstat()
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            raise DownloadConflict("Audio destination must be a regular file")
+        return info
+
     def _download_record(self, locked, guid, audio_url, name):
         """Validate identity and exclusive ownership while holding the JSON lock."""
         from . import contained_path
@@ -493,6 +537,7 @@ class EpisodeRepository(JsonRepository):
         if (self.base_dir / name).is_symlink():
             raise DownloadConflict("Audio destination must not be a symlink")
         target = contained_path(self.base_dir, name)
+        self._audio_destination_info(target)
         current = locked.get(guid)
         if current is None or current.audio_url != audio_url:
             raise DownloadConflict(
@@ -544,18 +589,52 @@ class EpisodeRepository(JsonRepository):
             os.close(descriptor)
             completed = False
             rollback_failed = False
+            stage_descriptor = None
             try:
                 transfer(episode.audio_url, stage)
+                try:
+                    stage_descriptor = os.open(
+                        stage, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                    )
+                except OSError:
+                    raise DownloadConflict(
+                        "Audio stage must be a nonempty regular file"
+                    ) from None
+                stage_info = self._audio_stage_info(stage, stage_descriptor)
                 completed = True
                 with self._lock():
                     locked = self._fetch_all()
                     current, target = self._download_record(
                         locked, episode.guid, episode.audio_url, name
                     )
-                    if target.exists():
-                        stage.chmod(stat.S_IMODE(target.stat().st_mode))
+                    target_info = self._audio_destination_info(target)
+                    if self._audio_generation(
+                        self._audio_stage_info(stage, stage_descriptor)
+                    ) != self._audio_generation(stage_info):
+                        raise DownloadConflict("Audio stage generation changed")
+                    if target_info is not None:
+                        os.fchmod(stage_descriptor, stat.S_IMODE(target_info.st_mode))
+                        changed = self._audio_stage_info(stage, stage_descriptor)
+                        # Our chmod changes mode/ctime, never identity or payload.
+                        if (
+                            changed.st_dev,
+                            changed.st_ino,
+                            changed.st_size,
+                            changed.st_mtime_ns,
+                        ) != (
+                            stage_info.st_dev,
+                            stage_info.st_ino,
+                            stage_info.st_size,
+                            stage_info.st_mtime_ns,
+                        ):
+                            raise DownloadConflict("Audio stage generation changed")
+                        stage_info = changed
+                    if self._audio_generation(
+                        self._audio_destination_info(target)
+                    ) != self._audio_generation(target_info):
+                        raise DownloadConflict("Audio destination generation changed")
                     backup = None
-                    if target.exists():
+                    if target_info is not None:
                         backup = (
                             self.base_dir / f".pdcst-download-{uuid4().hex}.previous"
                         )
@@ -573,9 +652,23 @@ class EpisodeRepository(JsonRepository):
                         },
                     )
                     try:
+                        if self._audio_generation(
+                            self._audio_destination_info(target)
+                        ) != self._audio_generation(target_info):
+                            raise DownloadConflict(
+                                "Audio destination generation changed"
+                            )
+                        if self._audio_generation(
+                            self._audio_stage_info(stage, stage_descriptor)
+                        ) != self._audio_generation(stage_info):
+                            raise DownloadConflict("Audio stage generation changed")
                         if backup is not None:
                             os.replace(target, backup)
                             previous_moved = True
+                        if self._audio_generation(
+                            self._audio_stage_info(stage, stage_descriptor)
+                        ) != self._audio_generation(stage_info):
+                            raise DownloadConflict("Audio stage generation changed")
                         os.replace(stage, target)
                         published = True
                         sync_directory(self.base_dir)
@@ -646,12 +739,30 @@ class EpisodeRepository(JsonRepository):
                 elif completed and stage.exists():
                     recovery = f"completed audio retained at {stage}"
                     if isinstance(error, DownloadConflict):
+                        try:
+                            unchanged = self._audio_generation(
+                                self._audio_stage_info(stage, stage_descriptor)
+                            ) == self._audio_generation(stage_info)
+                        except DownloadConflict:
+                            unchanged = False
+                        if not unchanged:
+                            recovery = f"inspect changed audio stage at {stage}"
                         raise DownloadConflict(f"{error}; {recovery}") from error
                     warnings.warn(recovery, RuntimeWarning, stacklevel=2)
                 raise
             finally:
+                if stage_descriptor is not None:
+                    os.close(stage_descriptor)
                 if not completed:
-                    stage.unlink(missing_ok=True)
+                    # A callback may have replaced the stage with a directory.
+                    # Never traverse/remove its contents or mask the refusal.
+                    try:
+                        info = stage.lstat()
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        if not stat.S_ISDIR(info.st_mode):
+                            stage.unlink(missing_ok=True)
 
     def _usable_audio_files(self, locked):
         """Retain only regular, non-symlink files with one unambiguous owner."""

@@ -9,9 +9,12 @@ def test_download_selections(tmp_path, monkeypatch, podcast, episode):
     monkeypatch.setattr(pdcst, "list_all_podcasts", lambda: [podcast])
     monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: [episode])
     calls = []
-    monkeypatch.setattr(
-        pdcst, "download_with_progress", lambda *args: calls.append(args)
-    )
+
+    def transfer(url, stage):
+        calls.append((url, stage))
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
     runner = CliRunner()
     for args, message in [
         (["unknown", "rest"], "No matching podcast"),
@@ -26,7 +29,11 @@ def test_download_selections(tmp_path, monkeypatch, podcast, episode):
     result = runner.invoke(pdcst.cli, ["download", "PyThOn", "ReFaCtOr"], color=False)
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
-    assert EpisodeRepository(tmp_path / podcast.directory).list()[0].audio_file
+    saved = EpisodeRepository(tmp_path / podcast.directory).list()[0]
+    assert saved.audio_file
+    assert (
+        tmp_path / podcast.directory / saved.audio_file
+    ).read_bytes() == b"synthetic audio"
 
 
 def test_ambiguous_downloads_never_mutate(tmp_path, monkeypatch, podcast, episode):
