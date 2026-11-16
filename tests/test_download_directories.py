@@ -132,3 +132,59 @@ def test_replaced_directory_never_redirects_download(
     admitted = moved / relative
     assert (admitted / repo.name).read_bytes() == before
     assert (admitted / "saved.mp3").read_bytes() == b"previous audio"
+
+
+def _transfer(url, stage, *, directory_fd):
+    from pdcst.storage import replacement_file
+
+    with replacement_file(stage, binary=True, directory_fd=directory_fd) as output:
+        output.write(b"completed audio")
+
+
+@pytest.mark.skipif(
+    not (getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)),
+    reason="platform has no search-only directory descriptors",
+)
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_search_only_ancestor_is_admitted(publication_store, episode):
+    home, repo = publication_store
+    # Pathname traversal needs only search permission on ancestors.
+    home.chmod(0o311)
+    try:
+        repo.download_episode(episode, "saved.mp3", _transfer)
+    finally:
+        home.chmod(0o755)
+    assert (repo.base_dir / "saved.mp3").read_bytes() == b"completed audio"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_unreadable_episode_directory_reports_access_failure(
+    publication_store, episode
+):
+    _, repo = publication_store
+    before = repo.path.read_bytes()
+    repo.base_dir.chmod(0o311)
+    try:
+        with pytest.raises(DownloadConflict) as raised:
+            repo.download_episode(episode, "saved.mp3", _transfer)
+    finally:
+        repo.base_dir.chmod(0o755)
+    message = str(raised.value)
+    assert "cannot be opened or created" in message
+    assert os.strerror(13) in message
+    assert "identity changed" not in message
+    assert repo.path.read_bytes() == before
+    assert (repo.base_dir / "saved.mp3").read_bytes() == b"previous audio"
+
+
+def test_symlinked_library_path_is_refused_without_writes(publication_store, episode):
+    home, repo = publication_store
+    before = repo.path.read_bytes()
+    alias = home.with_name(home.name + "-alias")
+    alias.symlink_to(home, target_is_directory=True)
+    aliased = repository.EpisodeRepository(alias / repo.base_dir.name)
+    with pytest.raises(DownloadConflict, match="symlinked.*symlink-free path"):
+        aliased.download_episode(episode, "saved.mp3", _transfer)
+    assert repo.path.read_bytes() == before
+    assert (repo.base_dir / "saved.mp3").read_bytes() == b"previous audio"
+    assert not list(repo.base_dir.glob(".pdcst-download-*"))

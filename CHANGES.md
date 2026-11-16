@@ -1,14 +1,19 @@
 # Unreleased
 
 * Bound unowned audio destination scans to a shared 10,000-entry/one-second
-  active scan budget across admission and publication. Refuse incomplete
-  ownership checks explicitly, preserving metadata/audio and releasing locks.
+  active scan budget across admission and publication. Admission may use at
+  most half, so folders that cannot also pass the publication recheck are
+  refused before transfer. Refuse incomplete ownership checks explicitly,
+  preserving metadata/audio and releasing locks.
 
 * Anchor downloads (claims, stages, metadata, intents, publication and rollback)
   to no-follow directory descriptors. Refuse replaced directory components
   before commit, preserving old JSON/audio without touching replacement trees.
-  Transfer callbacks now receive a borrowed `directory_fd` keyword and must use
-  it for stage access; the built-in HTTP transfer supports this contract.
+  Ancestors with only search permission are admitted search-only where
+  supported; symlinked components and access/creation failures are reported
+  separately from identity changes. Transfer callbacks now receive a borrowed
+  `directory_fd` keyword and must use it for stage access; the built-in HTTP
+  transfer supports this contract.
 
 * Reserve subscription directory components for metadata, intents, recovery files
   and feed/download locks, including case variants and resolved aliases; reject

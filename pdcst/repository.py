@@ -51,6 +51,9 @@ AUDIO_DESTINATION_SCAN_MAX_SECONDS = 1.0
 class _DestinationScanBudget:
     entries: int
     seconds: float
+    # Admission may use at most half, so the mandatory publication recheck of
+    # the same directory (plus its stage) still fits the remaining budget.
+    reserve_recheck: bool = False
 
 
 # Recoverable well-formedness errors that feedparser's lenient fallback repairs
@@ -693,7 +696,11 @@ class EpisodeRepository(JsonRepository):
                 AUDIO_DESTINATION_SCAN_MAX_ENTRIES, AUDIO_DESTINATION_SCAN_MAX_SECONDS
             )
         started = time.monotonic()
-        deadline = started + budget.seconds
+        entries_left = budget.entries // 2 if budget.reserve_recheck else budget.entries
+        deadline = started + (
+            budget.seconds / 2 if budget.reserve_recheck else budget.seconds
+        )
+        consumed = 0
 
         def refuse():
             raise DownloadConflict(
@@ -710,14 +717,14 @@ class EpisodeRepository(JsonRepository):
             with self._directory_entries() as entries:
                 while True:
                     check_time()
-                    if budget.entries <= 0:
+                    if consumed >= entries_left:
                         refuse()
                     try:
                         entry = next(entries)
                     except StopIteration:
                         check_time()
                         return False
-                    budget.entries -= 1
+                    consumed += 1
                     entry_key = unicodedata.normalize("NFC", entry.name).casefold()
                     check_time()
                     if entry_key == key:
@@ -725,6 +732,7 @@ class EpisodeRepository(JsonRepository):
         finally:
             # Share active scan work across admission/publication, excluding the
             # potentially long transfer and time waiting for either lock.
+            budget.entries -= consumed
             budget.seconds = max(0.0, budget.seconds - (time.monotonic() - started))
 
     def _directory_entries(self):
@@ -741,10 +749,8 @@ class EpisodeRepository(JsonRepository):
                 admitted._directory_fd = descriptor
 
                 return admitted._download_in_directory(episode, name, transfer, check)
-        except DirectoryAdmissionError:
-            raise DownloadConflict(
-                "Episode directory identity changed; retry download"
-            ) from None
+        except DirectoryAdmissionError as error:
+            raise DownloadConflict(str(error)) from None
 
     def _download_in_directory(self, episode, name, transfer, check_directory):
         """Claim audio, transfer outside the JSON lock, then commit only its link."""
@@ -753,13 +759,13 @@ class EpisodeRepository(JsonRepository):
         def check_directory():
             try:
                 check()
-            except DirectoryAdmissionError:
-                raise DownloadConflict(
-                    "Episode directory identity changed; retry download"
-                ) from None
+            except DirectoryAdmissionError as error:
+                raise DownloadConflict(str(error)) from None
 
         scan_budget = _DestinationScanBudget(
-            AUDIO_DESTINATION_SCAN_MAX_ENTRIES, AUDIO_DESTINATION_SCAN_MAX_SECONDS
+            AUDIO_DESTINATION_SCAN_MAX_ENTRIES,
+            AUDIO_DESTINATION_SCAN_MAX_SECONDS,
+            reserve_recheck=True,
         )
         claim = self.path.with_suffix(self.path.suffix + ".download.lock")
         with advisory_lock(claim, directory_fd=self._directory_fd):
@@ -773,6 +779,7 @@ class EpisodeRepository(JsonRepository):
                     name,
                     scan_budget,
                 )
+            scan_budget.reserve_recheck = False
             check_directory()
             stage = self.base_dir / f".pdcst-download-{uuid4().hex}"
             descriptor = os.open(
