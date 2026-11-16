@@ -72,7 +72,7 @@ def test_download_syncs_publications_before_retiring_backup(
     old_json = repo.path.read_bytes()
     events = []
     sync = os.fsync
-    unlink = Path.unlink
+    unlink = os.unlink
 
     def fsync(fd):
         if stat.S_ISDIR(os.fstat(fd).st_mode):
@@ -85,6 +85,7 @@ def test_download_syncs_publications_before_retiring_backup(
         sync(fd)
 
     def retire(path, *args, **kwargs):
+        path = Path(path)
         if path.name.endswith(".previous"):
             assert events[:2] == ["audio", "metadata"]
             events.append("retire")
@@ -94,9 +95,9 @@ def test_download_syncs_publications_before_retiring_backup(
     repo.path.write_bytes(b"\n" + old_json)
     old_json = repo.path.read_bytes()
     monkeypatch.setattr(os, "fsync", fsync)
-    monkeypatch.setattr(Path, "unlink", retire)
+    monkeypatch.setattr(os, "unlink", retire)
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         stage.write_bytes(b"completed")
 
     if failure in {"audio", "metadata"}:

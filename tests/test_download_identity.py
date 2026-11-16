@@ -31,7 +31,7 @@ def store(tmp_path, monkeypatch, podcast, episode):
     )
     calls = []
 
-    def transfer(url, target):
+    def transfer(url, target, **kwargs):
         calls.append(url)
         target.write_bytes(b"synthetic audio")
 
@@ -93,7 +93,7 @@ def test_concurrent_claims_preserve_owner(store, monkeypatch):
     second_started = threading.Event()
     release = threading.Event()
 
-    def transfer(url, target):
+    def transfer(url, target, **kwargs):
         calls.append(url)
         started.set()
         assert release.wait(5)
@@ -142,7 +142,7 @@ def test_feed_refresh_during_download(
         fresh.audio_url = "https://example.test/new.mp3"
     refreshed = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         assert url == episode.audio_url
         # A separate writer must finish while the download is in progress.
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -181,7 +181,7 @@ def test_feed_refresh_during_download(
 def test_failed_transfer_releases_claim(store, monkeypatch):
     repo, _, _, calls = store
 
-    def fail(url, stage):
+    def fail(url, stage, **kwargs):
         stage.write_bytes(b"partial")
         raise OSError("synthetic transfer failure")
 
@@ -214,7 +214,7 @@ def test_ownership_is_rechecked_before_publication(store, monkeypatch):
     repo, _, other, _ = store
     target = repo.base_dir / "same.mp3"
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         other.audio_file = target.name
         EpisodeRepository(repo.base_dir).add(other)
         target.write_bytes(b"other owner")
@@ -275,9 +275,9 @@ def test_unsafe_sibling_association_does_not_block_download(
         repo.add(other)
     else:
 
-        def refresh(url, stage):
+        def refresh(url, stage, **kwargs):
             EpisodeRepository(repo.base_dir).add(other)
-            transfer(url, stage)
+            transfer(url, stage, **kwargs)
 
         monkeypatch.setattr(pdcst, "download_with_progress", refresh)
     pdcst.download("show", "first")
@@ -357,11 +357,11 @@ def test_metadata_failure_rolls_back_audio(store, monkeypatch, existing_audio, f
 
     original_replace = repository.os.replace
 
-    def fail_replace(source, destination):
-        if Path(destination) == repo.path:
+    def fail_replace(source, destination, **kwargs):
+        if Path(destination).name == repo.path.name:
             injected.append(True)
             raise OSError("synthetic metadata replace failure")
-        return original_replace(source, destination)
+        return original_replace(source, destination, **kwargs)
 
     with monkeypatch.context() as patch:
         if failure in {"serialization", "interrupt"}:
@@ -393,22 +393,25 @@ def test_metadata_failure_rolls_back_audio(store, monkeypatch, existing_audio, f
 def test_backup_retirement_failure_is_success(store, monkeypatch, caller):
     from typer.testing import CliRunner
 
+    from pdcst import repository
+
     repo, episode, _, calls = store
     target = repo.base_dir / "same.mp3"
     episode.audio_file = target.name
     repo.add(episode)
     target.write_bytes(b"previous audio")
-    original_unlink = Path.unlink
+    original_unlink = repository.os.unlink
     injected = []
 
     def fail_backup(path, *args, **kwargs):
+        path = Path(path)
         if path.name.endswith(".previous"):
-            injected.append(path)
+            injected.append(repo.base_dir / path)
             raise OSError("private cleanup failure")
         return original_unlink(path, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(Path, "unlink", fail_backup)
+        patch.setattr(repository.os, "unlink", fail_backup)
         with pytest.warns(
             RuntimeWarning, match="Download completed.*previous audio"
         ) as recorded:
@@ -457,20 +460,22 @@ def test_secondary_rollback_failure_preserves_primary_and_bytes(
         injected.append("metadata")
         raise initiating
 
-    def fail_rollback(source, destination):
+    def fail_rollback(source, destination, **kwargs):
         source, destination = Path(source), Path(destination)
         completed_move = (
-            source == target
+            source.name == target.name
             and destination.name.startswith(".pdcst-download-")
             and not destination.name.endswith(".previous")
         )
-        previous_move = source.name.endswith(".previous") and destination == target
+        previous_move = (
+            source.name.endswith(".previous") and destination.name == target.name
+        )
         if (rollback_step == "completed" and completed_move) or (
             rollback_step == "previous" and previous_move
         ):
             injected.append(rollback_step)
             raise OSError("private rollback failure")
-        return original_replace(source, destination)
+        return original_replace(source, destination, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(EpisodeRepository, "_write_models", fail_write)

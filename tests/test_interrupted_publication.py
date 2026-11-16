@@ -86,8 +86,8 @@ replace = os.replace
 def pause():
     (home / 'ready').touch()
     sys.stdin.readline()
-def intercepted(source, target):
-    replace(source, target)
+def intercepted(source, target, **kwargs):
+    replace(source, target, **kwargs)
     if Path(target) == repo.path and sys.argv[1] == 'interrupted':
         pause()
 os.replace = intercepted
@@ -142,12 +142,12 @@ replace = os.replace
 def pause():
     (home / 'ready').touch()
     sys.stdin.readline()
-def intercepted(source, target):
-    replace(source, target)
+def intercepted(source, target, **kwargs):
+    replace(source, target, **kwargs)
     if Path(target).name.endswith('.previous') and sys.argv[1] == 'interrupted':
         pause()
 os.replace = intercepted
-def transfer(url, stage):
+def transfer(url, stage, **kwargs):
     stage.write_bytes(b'completed audio')
 pdcst.download_with_progress = transfer
 pdcst.cli(['download', 'python', 'refactor'], standalone_mode=False)

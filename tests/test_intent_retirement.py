@@ -29,23 +29,31 @@ def test_committed_publication_reports_pending_cleanup(
     incoming[0].title = "Updated title"
     before = episodes.path.read_bytes()
     marker_name = AUDIO_INTENT if kind == "audio" else REFRESH_INTENT
-    unlink = Path.unlink
+    unlink = repository.os.unlink
     sync = repository.sync_directory
     retirement = []
 
-    def intercept_unlink(path, *args, **kwargs):
+    def intercept_unlink(path, *args, missing_ok=False, **kwargs):
+        path = Path(path)
         if path.name == marker_name:
-            retirement.append(path)
+            retirement.append(episodes.base_dir / path)
             if failure == "unlink":
                 raise OSError("PRIVATE_ERROR")
-        return unlink(path, *args, **kwargs)
+        try:
+            return unlink(path, *args, **kwargs)
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
 
-    def intercept_sync(path):
+    def intercept_sync(path, **kwargs):
         if failure == "sync" and retirement:
             raise OSError("PRIVATE_ERROR")
-        return sync(path)
+        return sync(path, **kwargs)
 
+    # Python 3.10's pathlib caches its unlink accessor; newer Python calls
+    # os.unlink dynamically. Cover both without invoking the interceptor twice.
     monkeypatch.setattr(Path, "unlink", intercept_unlink)
+    monkeypatch.setattr(repository.os, "unlink", intercept_unlink)
     monkeypatch.setattr(repository, "sync_directory", intercept_sync)
 
     class Parser:
@@ -55,7 +63,7 @@ def test_committed_publication_reports_pending_cleanup(
     def publish():
         if kind == "audio":
 
-            def transfer(_url, stage):
+            def transfer(_url, stage, **kwargs):
                 stage.write_bytes(b"new audio")
 
             result = episodes.download_episode(incoming[0], "saved.mp3", transfer)
@@ -101,16 +109,24 @@ def test_pending_cleanup_without_previous_audio_names_no_backup(
     monkeypatch.setattr(pdcst.settings, "root", home)
     episode = episodes.list()[0]
     assert not (episodes.base_dir / "fresh.mp3").exists()
-    unlink = Path.unlink
+    unlink = repository.os.unlink
 
-    def intercept_unlink(path, *args, **kwargs):
+    def intercept_unlink(path, *args, missing_ok=False, **kwargs):
+        path = Path(path)
         if path.name == AUDIO_INTENT:
             raise OSError("PRIVATE_ERROR")
-        return unlink(path, *args, **kwargs)
+        try:
+            return unlink(path, *args, **kwargs)
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
 
+    # Python 3.10's pathlib caches its unlink accessor; newer Python calls
+    # os.unlink dynamically. Cover both without invoking the interceptor twice.
     monkeypatch.setattr(Path, "unlink", intercept_unlink)
+    monkeypatch.setattr(repository.os, "unlink", intercept_unlink)
 
-    def transfer(_url, stage):
+    def transfer(_url, stage, **kwargs):
         stage.write_bytes(b"new audio")
 
     with pytest.warns(RuntimeWarning, match="recovery cleanup pending") as warnings:

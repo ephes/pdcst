@@ -28,7 +28,7 @@ def test_owned_destination_must_remain_regular(publication_store, episode, when,
         replace_target()
     identity = target.lstat() if when == "before" else None
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         nonlocal identity
         calls.append(stage)
         stage.write_bytes(b"completed audio")
@@ -71,7 +71,7 @@ def test_transfer_result_admitted_before_intent(
     monkeypatch.setattr(repository, "write_intent", unexpected_intent)
     stages = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         stages.append(stage)
         if kind == "noop":
             return
@@ -112,7 +112,7 @@ def test_stage_generation_rechecked_before_intent(
     original = repo._download_record
     stages = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         stages.append(stage)
         stage.write_bytes(b"completed audio")
 
@@ -147,11 +147,11 @@ def test_publication_barrier_rechecks_generations(
     original = repository.write_intent
     changed_paths = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         stage.write_bytes(b"completed audio")
 
-    def change_at_intent(path, details):
-        original(path, details)
+    def change_at_intent(path, details, **kwargs):
+        original(path, details, **kwargs)
         affected = target if side == "destination" else Path(details["stage"])
         if change != "rewrite":
             affected.rename(affected.with_suffix(".retained"))
@@ -197,7 +197,7 @@ def test_exact_limit_stage_publishes_once(
     monkeypatch.setattr(repository.settings, "audio_max_bytes", 16)
     calls = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         calls.append(stage)
         stage.write_bytes(b"a" * 16)
 
@@ -221,13 +221,13 @@ def test_stage_change_while_moving_previous_audio_restores_it(
     replace = repository.os.replace
     stages = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         stages.append(stage)
         stage.write_bytes(b"completed audio")
 
-    def change_after_backup(source, destination):
-        result = replace(source, destination)
-        if Path(source) == target:
+    def change_after_backup(source, destination, **kwargs):
+        result = replace(source, destination, **kwargs)
+        if Path(source).name == target.name:
             stages[0].write_bytes(b"changed payload")
         return result
 

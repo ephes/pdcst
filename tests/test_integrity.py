@@ -122,7 +122,7 @@ def test_download_failure_leaves_metadata(tmp_path, monkeypatch, podcast, episod
     monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
     monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
 
-    def fail(*_):
+    def fail(*_, **kwargs):
         raise httpx.ReadError("disconnect")
 
     repo = EpisodeRepository(tmp_path / podcast.directory)

@@ -10,7 +10,7 @@ def test_download_selections(tmp_path, monkeypatch, podcast, episode):
     monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: [episode])
     calls = []
 
-    def transfer(url, stage):
+    def transfer(url, stage, **kwargs):
         calls.append((url, stage))
         stage.write_bytes(b"synthetic audio")
 
