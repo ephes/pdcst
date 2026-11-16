@@ -72,7 +72,10 @@ its index, including entries absent from a rolling feed. New GUIDs receive indic
 after the retained maximum in date/GUID order, even for newly discovered older
 episodes. Listing follows stored index order; subscription counts describe the
 retained inventory, not just the current feed window. Download associations keep
-their existing filenames.
+their existing filenames. Stores written by earlier releases may hold duplicate
+indices from renumbered feed windows; refresh repairs them by keeping each index
+on one episode (a downloaded one first, then the oldest) and moving the others
+after the retained maximum.
 The selected enclosure's supported type is retained as optional `audio_media_type`
 in episode JSON. Filename generation keeps recognized URL path suffixes stable
 (case insensitive, excluding query strings). Otherwise it uses this MIME mapping:

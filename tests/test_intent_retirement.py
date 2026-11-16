@@ -92,3 +92,31 @@ def test_committed_publication_reports_pending_cleanup(
     if failure == "unlink" or kind == "refresh":
         with pytest.raises(StoreReadError, match="unresolved publication"):
             (shows if kind == "refresh" else episodes).list()
+
+
+def test_pending_cleanup_without_previous_audio_names_no_backup(
+    publication_store, monkeypatch
+):
+    home, episodes = publication_store
+    monkeypatch.setattr(pdcst.settings, "root", home)
+    episode = episodes.list()[0]
+    assert not (episodes.base_dir / "fresh.mp3").exists()
+    unlink = Path.unlink
+
+    def intercept_unlink(path, *args, **kwargs):
+        if path.name == AUDIO_INTENT:
+            raise OSError("PRIVATE_ERROR")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", intercept_unlink)
+
+    def transfer(_url, stage):
+        stage.write_bytes(b"new audio")
+
+    with pytest.warns(RuntimeWarning, match="recovery cleanup pending") as warnings:
+        result = episodes.download_episode(episode, "fresh.mp3", transfer)
+    assert result == episodes.base_dir / "fresh.mp3"
+    message = str(warnings[0].message)
+    assert "previous audio" not in message
+    assert "None" not in message
+    assert str(episodes.base_dir / AUDIO_INTENT) in message

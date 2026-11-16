@@ -20,6 +20,7 @@
 
 * Keep GUID indices stable across rolling/reordered feeds, allocate new indices
   after the retained maximum, and count the full retained episode inventory.
+  Repair duplicate indices left by earlier releases on refresh.
 
 * Require regular, non-symlink owned audio destinations before transfer and
   publication; refuse changed generations without moving special entries.

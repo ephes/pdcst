@@ -725,9 +725,14 @@ class EpisodeRepository(JsonRepository):
                         try:
                             clear_intent(intent)
                         except OSError:
+                            retained = (
+                                f"previous audio retained at {backup}; "
+                                if backup is not None
+                                else ""
+                            )
                             warnings.warn(
                                 "Download completed; recovery cleanup pending at "
-                                f"{intent}; previous audio retained at {backup}; "
+                                f"{intent}; {retained}"
                                 "stop all pdcst commands and follow README "
                                 "interrupted-publication recovery; do not repeat transfer",
                                 RuntimeWarning,
@@ -836,6 +841,19 @@ class EpisodeRepository(JsonRepository):
         )
         usable = self._usable_audio_files(locked)
         next_index = max((row.index for row in locked.values()), default=0) + 1
+        # Stores written before indices were stable may hold duplicates from
+        # renumbered feed windows. Keep each index on one row (preferring a
+        # downloaded row, then the oldest) and move later duplicates after the
+        # retained maximum so index-based filenames stay distinct.
+        seen = set()
+        for row in sorted(
+            locked.values(),
+            key=lambda row: (row.index, row.pk not in usable, row.published, row.pk),
+        ):
+            if row.index in seen:
+                row.index = next_index
+                next_index += 1
+            seen.add(row.index)
         for model in sorted(
             incoming.values(), key=lambda row: (row.published, row.guid)
         ):

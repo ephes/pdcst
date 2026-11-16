@@ -66,3 +66,56 @@ def test_rolling_feed_keeps_indexes_counts_and_downloads(
     assert reopened[1].audio_file == "2.mp3"
     assert (directory / "2.mp3").read_bytes() == b"saved audio"
     assert PodcastRepository(tmp_path).list()[0].episodes_count == 4
+
+
+def test_legacy_duplicate_indexes_are_repaired_on_refresh(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.file_name_pattern = "{index}.mp3"
+    directory = tmp_path / podcast.directory
+    directory.mkdir(parents=True)
+
+    def row(guid, day, index):
+        result = deepcopy(episode)
+        result.guid = guid
+        result.title = guid
+        result.index = index
+        result.published += timedelta(days=day)
+        return result
+
+    # Stores written by renumbering releases: [a, b] then [b, c] left a=1, b=1.
+    a, b, c = row("a", 0, 1), row("b", 1, 1), row("c", 2, 2)
+    repo = EpisodeRepository(directory)
+    for legacy in (a, b, c):
+        repo.add(legacy)
+    b_saved = repo.list()
+    b_saved = next(r for r in b_saved if r.guid == "b")
+    b_saved.audio_file = "1.mp3"
+    (directory / "1.mp3").write_bytes(b"saved audio")
+    repo.add(b_saved)
+    PodcastRepository(tmp_path).add(podcast)
+
+    feed = [deepcopy(b), deepcopy(c)]
+    for index, current in enumerate(feed, 1):
+        current.index = index
+
+    class Parser:
+        def get(self, *_):
+            show = deepcopy(podcast)
+            show.episodes_count = len(feed)
+            return show, feed
+
+    refreshed = pdcst.subscribe(
+        podcast.feed.url,
+        podcast.file_name_pattern,
+        None,
+        Parser(),
+        PodcastRepository(tmp_path),
+    )
+    assert refreshed.episodes_count == 3
+    rows = EpisodeRepository(directory).list()
+    # The downloaded duplicate keeps its index; the other moves after the maximum.
+    assert [(r.guid, r.index) for r in rows] == [("b", 1), ("c", 2), ("a", 3)]
+    assert next(r for r in rows if r.guid == "b").audio_file == "1.mp3"
+    assert (directory / "1.mp3").read_bytes() == b"saved audio"
