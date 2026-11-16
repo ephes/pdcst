@@ -10,7 +10,6 @@ import json
 import os
 import re
 import stat
-import sys
 import time
 import unicodedata
 import warnings
@@ -371,6 +370,22 @@ class JsonRepository:
     def _fetch_all(self):
         self._check_intents()
         data = self._read_bytes()
+        markers = self._intent_markers()
+        if markers:
+            if self.__dict__.get("_lock_depth"):
+                self._check_intents()
+            try:
+                # The first bytes may overlap a publication. Wait/recheck using
+                # its owner lock and reread a settled generation while holding it.
+                with self._lock():
+                    data = self._read_bytes()
+            except StoreWriteError as error:
+                raise StoreReadError(
+                    self.path,
+                    f"publication marker {markers[0]} observed during read and its "
+                    f"lock is unavailable ({error}); retry later, or follow README "
+                    "interrupted-publication recovery",
+                ) from error
         if data is None:
             return {}
         try:
@@ -707,7 +722,23 @@ class EpisodeRepository(JsonRepository):
                     else:
                         # The matching audio and JSON are both durable. A crash
                         # after this point needs at most orphan-backup cleanup.
-                        clear_intent(intent)
+                        try:
+                            clear_intent(intent)
+                        except OSError:
+                            retained = (
+                                f"previous audio retained at {backup}; "
+                                if backup is not None
+                                else ""
+                            )
+                            warnings.warn(
+                                "Download completed; recovery cleanup pending at "
+                                f"{intent}; {retained}"
+                                "stop all pdcst commands and follow README "
+                                "interrupted-publication recovery; do not repeat transfer",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                            return target
                         if backup is not None:
                             try:
                                 backup.unlink()
@@ -803,19 +834,43 @@ class EpisodeRepository(JsonRepository):
             if names[key] == 1 and files[identity] == 1
         }
 
-    def _import_locked(self, models, locked):
+    def _merge_import(self, models, locked):
         incoming = index_unique(
             [self.storage_model_type(**model.dict()) for model in models],
             lambda model: model.pk,
         )
         usable = self._usable_audio_files(locked)
-        for model in incoming.values():
+        next_index = max((row.index for row in locked.values()), default=0) + 1
+        # Stores written before indices were stable may hold duplicates from
+        # renumbered feed windows. Keep each index on one row (preferring a
+        # downloaded row, then the oldest) and move later duplicates after the
+        # retained maximum so index-based filenames stay distinct.
+        seen = set()
+        for row in sorted(
+            locked.values(),
+            key=lambda row: (row.index, row.pk not in usable, row.published, row.pk),
+        ):
+            if row.index in seen:
+                row.index = next_index
+                next_index += 1
+            seen.add(row.index)
+        for model in sorted(
+            incoming.values(), key=lambda row: (row.published, row.guid)
+        ):
             previous = locked.get(model.pk)
+            if previous is not None:
+                model.index = previous.index
+            else:
+                model.index = next_index
+                next_index += 1
             model.audio_file = None
             if previous and previous.audio_url == model.audio_url:
                 model.audio_file = usable.get(model.pk)
             locked[model.pk] = model
-        self._write_models(locked)
+        return dict(sorted(locked.items(), key=lambda item: (item[1].index, item[0])))
+
+    def _import_locked(self, models, locked):
+        self._write_models(self._merge_import(models, locked))
 
     def import_list(self, models):
         """Refresh feed metadata while retaining usable local download state."""
@@ -823,10 +878,12 @@ class EpisodeRepository(JsonRepository):
             self._import_locked(models, self._fetch_all())
 
     @contextmanager
-    def subscription_import(self, models, podcasts_repo=None):
+    def subscription_import(self, models, podcasts_repo=None, prepare=None):
         """Fence an interrupted pair until an operator settles its generations."""
         with self._lock():
-            locked = self._fetch_all()
+            locked = self._merge_import(models, self._fetch_all())
+            if prepare is not None:
+                prepare(locked)
             previous = self._read_bytes()
             token = uuid4().hex
             backup = self.base_dir / f".pdcst-refresh-{token}.previous"
@@ -843,6 +900,7 @@ class EpisodeRepository(JsonRepository):
                 markers.append(podcasts_repo.base_dir / REFRESH_INTENT)
             retain = False
             imported = False
+            completed = False
             try:
                 if previous is not None:
                     self._write_refresh_backup(backup, previous)
@@ -868,9 +926,10 @@ class EpisodeRepository(JsonRepository):
                     sync_directory(podcasts_repo.base_dir)
                 for path in markers:
                     write_intent(path, details)
-                self._import_locked(models, locked)
+                self._write_models(locked)
                 imported = True
                 yield
+                completed = True
             except BaseException as error:
                 episodes_unsynced = isinstance(error, PublicationDurabilityError)
                 if episodes_unsynced:
@@ -910,23 +969,45 @@ class EpisodeRepository(JsonRepository):
                 if not retain:
                     # Retire markers only after successful publication or a
                     # synced rollback. Keep backups if marker retirement fails.
-                    pending_error = sys.exc_info()[0] is not None
+                    pending_error = not completed
                     try:
                         for path in markers:
                             clear_intent(path)
-                    except BaseException:
+                    except BaseException as error:
                         if not pending_error:
-                            raise
-                        warnings.warn(
-                            f"Refresh recovery cleanup incomplete; inspect {marker}",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
+                            if not isinstance(error, OSError):
+                                raise
+                            warnings.warn(
+                                "Refresh completed; recovery cleanup pending at "
+                                + ", ".join(str(path) for path in markers)
+                                + "; metadata backups retained; stop all pdcst "
+                                "commands and follow README interrupted-publication "
+                                "recovery; do not repeat refresh",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                        else:
+                            warnings.warn(
+                                f"Refresh recovery cleanup incomplete; inspect {marker}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
                     else:
-                        backup.unlink(missing_ok=True)
-                        recovery.unlink(missing_ok=True)
-                        if podcast_backup is not None:
-                            podcast_backup.unlink(missing_ok=True)
+                        try:
+                            backup.unlink(missing_ok=True)
+                            recovery.unlink(missing_ok=True)
+                            if podcast_backup is not None:
+                                podcast_backup.unlink(missing_ok=True)
+                        except OSError:
+                            if pending_error:
+                                message = "Refresh recovery cleanup incomplete"
+                            else:
+                                message = "Refresh completed; backup cleanup incomplete"
+                            warnings.warn(
+                                f"{message}; inspect {backup}, {recovery}, {podcast_backup}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb
@@ -983,6 +1064,76 @@ class FeedParserRepository:
     MAX_BYTES = 8 * 1024 * 1024
     MAX_SECONDS = 30
     MAX_REDIRECTS = 5
+    MAX_XML_DEPTH = 64
+    MAX_XML_NODES = 100_000
+    MAX_XML_ENTRIES = 10_000
+    MAX_XML_LINKS = 50_000
+    MAX_XML_ATTRIBUTES = 200_000
+    MAX_XML_BYTES = 16 * 1024**2
+
+    @classmethod
+    def preflight_xml(cls, body, headers, remaining):
+        """Count XML work without building a tree or expanding DTD entities."""
+        remaining()
+        # Use the same charset detection/repair as the later feed parse, without
+        # constructing entries. Neutralise only the tolerated entity spellings.
+        converted = feedparser.encodings.convert_to_utf8(headers, bytes(body), {})
+        if len(converted) > cls.MAX_XML_BYTES:
+            raise FeedError("Feed XML decoded byte limit exceeded")
+        text = _UNESCAPED_AMPERSAND.sub("&amp;", converted.decode("utf-8"))
+        normalized = text.encode("utf-8")
+        if len(normalized) > cls.MAX_XML_BYTES:
+            raise FeedError("Feed XML repaired byte limit exceeded")
+        parser = expat.ParserCreate(namespace_separator=" ")
+        depth = nodes = entries = links = attributes = 0
+
+        def start(name, attrs):
+            nonlocal depth, nodes, entries, links, attributes
+            depth += 1
+            nodes += 1
+            attributes += len(attrs)
+            local = name.rsplit(" ", 1)[-1].lower()
+            entries += local in {"item", "entry"}
+            links += local in {"link", "enclosure"}
+            if (
+                depth > cls.MAX_XML_DEPTH
+                or nodes > cls.MAX_XML_NODES
+                or entries > cls.MAX_XML_ENTRIES
+                or links > cls.MAX_XML_LINKS
+                or attributes > cls.MAX_XML_ATTRIBUTES
+            ):
+                raise FeedError("Feed XML work limit exceeded")
+            if nodes % 256 == 0:
+                remaining()
+
+        def end(_name):
+            nonlocal depth
+            depth -= 1
+
+        def namespace(_prefix, _uri):
+            nonlocal attributes
+            attributes += 1
+            if attributes > cls.MAX_XML_ATTRIBUTES:
+                raise FeedError("Feed XML work limit exceeded")
+
+        def doctype(*_args):
+            raise FeedError("Feed XML DOCTYPE is unsupported")
+
+        parser.StartElementHandler = start
+        parser.EndElementHandler = end
+        parser.StartNamespaceDeclHandler = namespace
+        parser.StartDoctypeDeclHandler = doctype
+        try:
+            for offset in range(0, len(normalized), 64 * 1024):
+                remaining()
+                stop = offset + 64 * 1024
+                parser.Parse(normalized[offset:stop], False)
+            parser.Parse(b"", True)
+        except (expat.ExpatError, ValueError, UnicodeError) as error:
+            if isinstance(error, FeedError):
+                raise
+            raise FeedError("Feed contains malformed or incomplete XML") from None
+        remaining()
 
     @classmethod
     def fetch_document(cls, url):
@@ -1034,12 +1185,15 @@ class FeedParserRepository:
                         headers["content-location"] = urljoin(
                             str(response.url), headers.get("content-location", "")
                         )
+                        cls.preflight_xml(body, headers, remaining)
                         document = feedparser.parse(
                             bytes(body), response_headers=headers
                         )
+                        remaining()
                         if _feed_parse_refused(document, body):
                             raise FeedError("Feed contains malformed or incomplete XML")
                         for entry in document.entries:
+                            remaining()
                             for enclosure in entry.get("links", []):
                                 if enclosure.get("rel") != "enclosure":
                                     continue

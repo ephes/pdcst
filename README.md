@@ -66,7 +66,16 @@ an enclosure without a media type may be used when its URL path ends in .mp3,
 are ignored). Explicit types outside the supported list are rejected, even with
 an audio extension. Enclosure URLs containing whitespace are rejected.
 Unusable entries are skipped with a warning reporting their count; valid sibling
-episodes remain available and receive contiguous chronological indices.
+episodes remain available. On first import they receive chronological indices
+(with GUID order breaking equal-date ties). Refresh retains every stored GUID and
+its index, including entries absent from a rolling feed. New GUIDs receive indices
+after the retained maximum in date/GUID order, even for newly discovered older
+episodes. Listing follows stored index order; subscription counts describe the
+retained inventory, not just the current feed window. Download associations keep
+their existing filenames. Stores written by earlier releases may hold duplicate
+indices from renumbered feed windows; refresh repairs them by keeping each index
+on one episode (a downloaded one first, then the oldest) and moving the others
+after the retained maximum.
 The selected enclosure's supported type is retained as optional `audio_media_type`
 in episode JSON. Filename generation keeps recognized URL path suffixes stable
 (case insensitive, excluding query strings). Otherwise it uses this MIME mapping:
@@ -120,6 +129,15 @@ report only a bounded category (including HTTP status or timeout when available)
 Library exceptions retain no underlying transport cause/context, so their messages
 and formatted tracebacks omit private URL credentials, queries and fragments.
 Failed HTTP response bodies are not read for diagnostics.
+
+Before feedparser materializes entries, a streaming XML preflight admits at most
+64 levels of nesting, 100,000 elements, 10,000 RSS items/Atom entries, 50,000
+link/enclosure elements and 200,000 attributes/namespace declarations in total.
+Charset decoding and entity repair each have a 16 MiB UTF-8 ceiling. DOCTYPE declarations (including
+external DTDs) are refused before expansion or external access. The acquisition
+deadline is also checked during preflight, after parsing and during enclosure
+traversal; parser calls are synchronous, bounded by these input/work limits.
+These fixed limits refuse the refresh before either metadata store changes.
 
 Malformed or incomplete XML is refused before using partial parser entries,
 including truncated items, mismatched tags and malformed trailing XML. Parser
@@ -236,12 +254,23 @@ relying on host permission behavior.
 are converted to single safe components for new subscriptions. Existing stored
 directory names and contained legacy directories remain stable. `--podcast-dir` may specify a relative
 subdirectory within that root; absolute paths, parent traversal, Windows paths,
-and symlinks resolving outside the root are rejected before writing. Filename
-patterns must produce a single relative filename. Supported placeholders are
+and symlinks resolving outside the root are rejected before writing. Directory components may not use `podcasts.json`, `episodes.json`, their metadata
+or download lock names, `.feed-locks`, or any `.pdcst-refresh-`/`.pdcst-download-`
+name (including intent and recovery names). The check ignores case, normalizes
+Unicode and includes resolved in-root aliases; it applies at every nesting level.
+Explicit reserved directories are refused before creating locks/directories or
+fetching the feed. Ordinary custom/hidden directories such as `.shows` remain
+supported. Legacy stored reserved directories must be corrected before refresh.
+Filename patterns must produce a single relative filename. Supported placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
-before metadata publication or audio transfer. Both `add` and `download` report
+before metadata publication or audio transfer. Subscription preflight checks the
+entire retained inventory, including episodes absent from the current feed, after
+assigning stable indices. Generated filenames must be distinct under NFC Unicode
+normalization and case folding on every host. A collision refuses both metadata
+updates; use a pattern including `{index}`. Existing downloaded filenames remain
+associated without renaming. Both `add` and `download` report
 pattern failures as concise CLI errors. Formatting accepts the standard spec
 syntax with bounded numbers (every width/precision 0–255): an optional fill and
 alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,
@@ -368,6 +397,18 @@ together, the previous audio backup is retained, and the command reports uncerta
 durability. Inspect these files before retrying; this is not a rollback or a
 crash-atomic transaction. A failure before JSON replacement restores prior audio.
 
+Once audio and JSON, or both refreshed metadata stores, have been published and
+synced, an intent-retirement unlink or directory-sync error is a **committed
+success with recovery cleanup pending**. The API returns the completed download
+path or refreshed podcast, and the CLI succeeds with a bounded warning naming
+the intent paths. Matching new data and remaining backups are kept; cleanup alone
+never triggers compensation. A marker may already be absent after a sync failure.
+Do not repeat the transfer or refresh. Stop all commands, inspect the named paths
+and retained generations, and follow Interrupted-publication recovery below to
+verify the committed generation and retire remaining markers/backups. An unresolved
+remaining marker continues to fence later reads. Backup-only refresh cleanup
+failures also warn without converting the committed refresh into a failure.
+
 Once audio and JSON have both been published and synced, failure to remove or
 sync the retirement of the previous backup is a cleanup warning: the download
 succeeds, and `download_episode` returns the completed destination path. The warning names the
@@ -473,7 +514,10 @@ including episode listing and download; a refresh root marker also blocks
 subscription browsing and all subscriptions. The error names the marker. Writers publish
 and retire their markers while holding the owning store lock (the episode store
 lock for episode-directory markers, the subscription store lock for the root
-marker). A command that sees a marker waits for that lock, within the lock wait
+marker). Readers check markers before and after reading bytes. A marker appearing during
+a read discards those bytes; after waiting for its owner lock, the reader rereads
+a settled generation under that lock. This does not provide a multi-store atomic
+read. A command that sees a marker waits for that lock, within the lock wait
 limit, and checks again: an in-progress publication only delays it, while a
 marker still present under the lock is unresolved. If the wait limit expires or
 the lock cannot be opened (for example a read-only store) while the marker is

@@ -1,5 +1,27 @@
 # Unreleased
 
+* Reserve subscription directory components for metadata, intents, recovery files
+  and feed/download locks, including case variants and resolved aliases; reject
+  explicit control paths before creating locks or fetching the feed.
+
+* Preflight decoded/repaired XML before feedparser entry materialization, bounding
+  depth, elements, entries, links and attributes/namespace declarations; reject
+  DOCTYPE declarations before entity expansion and extend elapsed checks through parsing/traversal.
+
+* Report committed audio/paired-metadata publications with intent-retirement
+  failures as successful with recovery cleanup pending; preserve matching data
+  and remaining backups, name recovery actions, and avoid repeat transfers.
+
+* Fence metadata reads with a post-read publication-intent check; wait/recheck
+  and reread under the owner lock rather than accepting overlapping bytes.
+
+* Preflight generated filenames across incoming and retained episodes, refusing
+  Unicode/case-equivalent collisions before publishing either metadata store.
+
+* Keep GUID indices stable across rolling/reordered feeds, allocate new indices
+  after the retained maximum, and count the full retained episode inventory.
+  Repair duplicate indices left by earlier releases on refresh.
+
 * Require regular, non-symlink owned audio destinations before transfer and
   publication; refuse changed generations without moving special entries.
 * Independently admit completed transfer stages through a bounded, nonempty

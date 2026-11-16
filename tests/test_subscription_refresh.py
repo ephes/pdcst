@@ -272,7 +272,7 @@ def test_subscription_publish_failure_is_retryable(
     assert (directory / "saved.mp3").read_bytes() == b"synthetic"
     assert imported.audio_file == "saved.mp3"
     pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), repo)
-    assert repo.list()[0].episodes_count == 2
+    assert repo.list()[0].episodes_count == 1
     assert EpisodeRepository(directory).list()[0].audio_file == (
         None if changed_enclosure else "saved.mp3"
     )
