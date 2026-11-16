@@ -1,6 +1,7 @@
 """Synthetic subscription root replacement barriers."""
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Event
 
 import pytest
@@ -219,3 +220,37 @@ def test_root_replaced_during_episode_admission_leaves_replacement_untouched(
         p.relative_to(moved): p.read_bytes() for p in moved.rglob("*.json")
     }
     assert not list(moved.rglob(".pdcst-refresh-*"))
+
+
+def test_root_symlink_retargeted_during_fetch_is_refused(
+    tmp_path, monkeypatch, podcast, episode
+):
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(first, target_is_directory=True)
+    monkeypatch.setattr(pdcst.settings, "root", alias / "home")
+    PodcastRepository(first / "home").add(podcast)
+    (second / "home").mkdir()
+    (second / "home" / "podcasts.json").write_bytes(
+        (first / "home" / "podcasts.json").read_bytes()
+    )
+    before = {p.relative_to(first): p.read_bytes() for p in first.rglob("*.json")}
+
+    class Parser:
+        def get(self, *_):
+            alias.unlink()
+            alias.symlink_to(second, target_is_directory=True)
+            return podcast, [episode]
+
+    with pytest.raises(StoreWriteError, match="outside the admitted storage root"):
+        pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser())
+    assert sorted(p.relative_to(second) for p in second.rglob("*")) == [
+        Path("home"),
+        Path("home/podcasts.json"),
+    ]
+    assert before == {
+        p.relative_to(first): p.read_bytes() for p in first.rglob("*.json")
+    }
+    assert not list(first.rglob(".pdcst-refresh-*"))

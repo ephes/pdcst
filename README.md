@@ -305,7 +305,9 @@ The CLI resolves the configured storage root (`PDCST_HOME`) first, so a
 symlinked ancestor such as macOS `/tmp` keeps working; errors name the storage
 root, episode or feed lock directory that failed.
 Refresh opens the episode directory relative to the held root and holds it as
-well: locks, backups, intents, replacements,
+well (an episode path that no longer lies under the admitted root, for example
+after `PDCST_HOME` is retargeted during the fetch, is refused): locks, backups,
+intents, replacements,
 cleanup and rollback use those descriptors. A changed root/ancestor refuses
 publication without writing into its replacement; rollback stays in the admitted
 (possibly renamed) tree. Restore the original directory layout before retrying.

@@ -37,6 +37,7 @@ from .config import settings
 from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
 from .storage import (
     DirectoryAdmissionError,
+    DirectoryIdentityChanged,
     PublicationDurabilityError,
     admitted_directory,
     replacement_file,
@@ -314,21 +315,26 @@ class JsonRepository:
 
         A directory below an admitted parent repository is opened relative to
         the parent's held descriptor, and its checker also checks the parent.
+        A directory outside an admitted parent is refused, never walked by name.
         """
         if self._directory_fd is not None:
             self._check_directory()
             yield self
             return
         relative = None
-        if parent is not None and parent._directory_fd is not None:
-            parent._check_directory()
-            try:
-                relative = self.base_dir.relative_to(parent.base_dir)
-            except ValueError:
-                relative = None
-            if relative is not None and not relative.parts:
-                relative = None
         try:
+            if parent is not None and parent._directory_fd is not None:
+                parent._check_directory()
+                try:
+                    relative = self.base_dir.relative_to(parent.base_dir)
+                except ValueError:
+                    relative = None
+                if relative is None or not relative.parts:
+                    raise DirectoryIdentityChanged(
+                        f"{self._directory_label} is outside the admitted "
+                        f"{parent._directory_label.lower()}; restore the "
+                        "directory layout before retrying"
+                    )
             if relative is None:
                 admission = admitted_directory(
                     self.base_dir, create=create, label=self._directory_label
