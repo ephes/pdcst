@@ -1,5 +1,10 @@
 # Unreleased
 
+* Admit `.feed-locks` relative to the held subscription root without following
+  symlinks, acquire hashed locks through that descriptor, and recheck directory
+  identities after waiting and before publication. Refuse aliases/replacements
+  without redirecting locks or fetching through invalid lock authority.
+
 * Bind subscription metadata reads/writes and paired refresh backups, intents,
   publication, cleanup and rollback to held no-follow directories. Refuse changed
   root/ancestor identities before publication without touching replacement trees;

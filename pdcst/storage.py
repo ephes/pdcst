@@ -133,9 +133,11 @@ def _open_component(name, parent, *, search_only_ok):
 
 
 @contextmanager
-def admitted_directory(path, *, create=True):
-    """Open each absolute component without following links; retain its identity.
+def admitted_directory(path, *, create=True, parent_fd=None):
+    """Open components without following links and retain their identities.
 
+    Relative paths may start at a borrowed parent_fd; its owner must also check
+    that parent's identity. Missing components are created only with create=True.
     All writes use the final fd. The checker rejects a renamed/replaced root or
     ancestor even when a replacement happens to contain identical metadata.
     Ancestors that grant only search permission are opened search-only where the
@@ -147,9 +149,22 @@ def admitted_directory(path, *, create=True):
     components = []
     try:
         try:
-            descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            if parent_fd is None:
+                descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                parts = Path(os.path.abspath(path)).parts[1:]
+            else:
+                relative = Path(path)
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or not relative.parts
+                ):
+                    raise DirectoryAdmissionError(
+                        "Directory must be a relative child path"
+                    )
+                descriptor = os.dup(parent_fd)
+                parts = relative.parts
             descriptors.append(descriptor)
-            parts = Path(os.path.abspath(path)).parts[1:]
             for position, name in enumerate(parts):
                 search_only_ok = position < len(parts) - 1
                 try:

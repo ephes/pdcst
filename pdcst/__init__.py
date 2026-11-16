@@ -90,9 +90,8 @@ def subscribe(
         podcasts_repo = PodcastRepository(settings.root)
     with podcasts_repo.admitted() as admitted:
         admitted._check_intents()
-        with admitted.feed_lock(feed_url):
-            admitted._check_directory()
-            return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, admitted)
+        with admitted.feed_lock(feed_url) as locked:
+            return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, locked)
 
 
 def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):

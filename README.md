@@ -409,8 +409,9 @@ stage is refused while preserving the previous audio and metadata. Ordinary
 invalid stages are removed; a directory substituted at the reserved stage path
 is left intact for manual inspection and is never traversed or removed. These
 checks detect changes at admission/publication boundaries; they assume local
-processes do not replace entries after the final check or change directory
-symlinks during the command. They do not validate audio codecs.
+processes do not replace individual files after the final generation check.
+Directory operations remain bound to the admitted descriptors. These checks do
+not validate audio codecs.
 
 Downloads commit only the local filename against the current GUID and captured
 enclosure URL, preserving newer titles, dates and indices. If the episode disappears
@@ -525,7 +526,12 @@ an ordered two-file update, not a crash-atomic transaction. New directories and
 stable lock files may remain after a failed import.
 
 Feed refreshes hold a stable per-feed POSIX advisory lock in `.feed-locks/`
-from before acquisition until publication finishes. Concurrent refreshes of the
+from before acquisition until publication finishes. The directory is opened
+relative to the held storage root without following symlinks, and the hashed lock
+is opened through its directory descriptor. Symlinked lock directories, including
+in-root aliases, are refused before fetching; replacement while waiting or fetching
+refuses publication. Restore the admitted directory layout before retrying.
+Concurrent refreshes of the
 same URL wait and then fetch anew, so an older acquisition cannot overwrite a
 newer one. Different feeds acquire independently and share the subscription
 lock only during publication. Lock order is feed, subscription, then episode;

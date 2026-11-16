@@ -1301,11 +1301,26 @@ class PodcastRepository(JsonRepository):
     @contextmanager
     def feed_lock(self, url):
         """Serialize one feed's acquisition through publication across processes."""
-        directory = self.base_dir / ".feed-locks"
-        directory.mkdir(parents=True, exist_ok=True)
         name = sha256(url.encode("utf-8")).hexdigest() + ".lock"
-        with advisory_lock(directory / name):
-            yield
+        try:
+            with self.admitted() as admitted:
+                with admitted_directory(
+                    ".feed-locks", parent_fd=admitted._directory_fd
+                ) as (descriptor, check_locks):
+
+                    def check():
+                        admitted._check_directory()
+                        check_locks()
+
+                    check()
+                    directory = self.base_dir / ".feed-locks"
+                    with advisory_lock(directory / name, directory_fd=descriptor):
+                        check()
+                        locked = copy(admitted)
+                        locked._check_directory = check
+                        yield locked
+        except DirectoryAdmissionError as error:
+            raise StoreWriteError(f"Cannot acquire feed lock: {error}") from None
 
     def list(self, additional_attributes=None):
         from . import contained_path
