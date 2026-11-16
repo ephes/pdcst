@@ -14,10 +14,10 @@ class DownloadError(ValueError):
     """An expected audio acquisition failure with a private, bounded diagnostic."""
 
 
-def download_with_progress(url, target_path):
+def download_with_progress(url, target_path, *, directory_fd=None):
     """Transfer audio, reporting transport failures without private URL values."""
     try:
-        return _download_with_progress(url, target_path)
+        return _download_with_progress(url, target_path, directory_fd=directory_fd)
     except PublicationDurabilityError:
         # The target is an internal stage; publication has not happened yet.
         raise DownloadError(
@@ -31,7 +31,7 @@ def download_with_progress(url, target_path):
         raise DownloadError("Unable to fetch audio") from None
 
 
-def _download_with_progress(url, target_path):
+def _download_with_progress(url, target_path, *, directory_fd=None):
     target_path = Path(target_path)
     deadline = monotonic() + settings.audio_max_seconds
 
@@ -62,8 +62,11 @@ def _download_with_progress(url, target_path):
                 ):
                     raise DownloadError("Audio download byte limit exceeded")
                 total = int(digits)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            with replacement_file(target_path, binary=True) as output:
+            if directory_fd is None:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+            with replacement_file(
+                target_path, binary=True, directory_fd=directory_fd
+            ) as output:
                 completed = 0
                 with rich.progress.Progress(
                     rich.progress.BarColumn(bar_width=None),

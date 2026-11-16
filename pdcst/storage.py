@@ -16,9 +16,13 @@ class PublicationDurabilityError(OSError):
         )
 
 
-def sync_directory(path):
+def sync_directory(path, *, directory_fd=None):
     """Persist preceding name changes before reporting durable publication."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    descriptor = (
+        os.dup(directory_fd)
+        if directory_fd is not None
+        else os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    )
     try:
         os.fsync(descriptor)
     finally:
@@ -26,10 +30,19 @@ def sync_directory(path):
 
 
 @contextmanager
-def replacement_file(target, *, binary=False):
+def replacement_file(target, *, binary=False, directory_fd=None):
     # Short name: independent of the length of the destination name.
     temporary = target.with_name(f".{uuid.uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+
+    def local(path):
+        return path.name if directory_fd is not None else path
+
+    descriptor = os.open(
+        local(temporary),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o666,
+        **({"dir_fd": directory_fd} if directory_fd is not None else {}),
+    )
     try:
         # Keep descriptor ownership here even if stream construction fails midway.
         try:
@@ -46,17 +59,101 @@ def replacement_file(target, *, binary=False):
                 yield output
                 output.flush()
                 try:
-                    mode = stat.S_IMODE(target.stat().st_mode)
+                    mode = stat.S_IMODE(
+                        target.stat().st_mode
+                        if directory_fd is None
+                        else os.stat(
+                            target.name, dir_fd=directory_fd, follow_symlinks=False
+                        ).st_mode
+                    )
                 except FileNotFoundError:
                     mode = creation_mode
                 os.fchmod(output.fileno(), mode)
                 os.fsync(output.fileno())
         finally:
             os.close(descriptor)
-        os.replace(temporary, target)
+        if directory_fd is None:
+            os.replace(temporary, target)
+        else:
+            os.replace(
+                local(temporary),
+                local(target),
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
         try:
-            sync_directory(target.parent)
+            if directory_fd is None:
+                sync_directory(target.parent)
+            else:
+                sync_directory(target.parent, directory_fd=directory_fd)
         except (OSError, KeyboardInterrupt):
             raise PublicationDurabilityError(target) from None
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            if directory_fd is None:
+                temporary.unlink()
+            else:
+                os.unlink(temporary.name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+class DirectoryAdmissionError(ValueError):
+    """A directory component cannot be admitted or has been replaced."""
+
+
+@contextmanager
+def admitted_directory(path):
+    """Open each absolute component without following links; retain its identity.
+
+    All writes use the final fd. The checker rejects a renamed/replaced root or
+    ancestor even when a replacement happens to contain identical metadata.
+    """
+    from pathlib import Path
+
+    descriptors = []
+    components = []
+    try:
+        try:
+            descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            descriptors.append(descriptor)
+            for name in Path(os.path.abspath(path)).parts[1:]:
+                try:
+                    child = os.open(
+                        name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                except FileNotFoundError:
+                    os.mkdir(name, dir_fd=descriptor)
+                    child = os.open(
+                        name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                components.append((descriptor, name, child))
+                descriptors.append(child)
+                descriptor = child
+        except OSError:
+            raise DirectoryAdmissionError(
+                "Directory unavailable or identity changed"
+            ) from None
+
+        def check():
+            try:
+                for parent, name, child in components:
+                    opened = os.fstat(child)
+                    named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    if not stat.S_ISDIR(named.st_mode) or (
+                        opened.st_dev,
+                        opened.st_ino,
+                    ) != (named.st_dev, named.st_ino):
+                        raise DirectoryAdmissionError("Directory identity changed")
+            except OSError:
+                raise DirectoryAdmissionError("Directory identity changed") from None
+
+        check()
+        yield descriptor, check
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)

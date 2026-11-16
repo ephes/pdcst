@@ -15,11 +15,12 @@ import unicodedata
 import warnings
 from collections import Counter
 from contextlib import contextmanager
+from copy import copy
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from operator import itemgetter
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
 from xml.parsers import expat
@@ -32,7 +33,13 @@ from pydantic import BaseModel, ValidationError, conint, parse_obj_as, validator
 
 from .config import settings
 from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
-from .storage import PublicationDurabilityError, replacement_file, sync_directory
+from .storage import (
+    DirectoryAdmissionError,
+    PublicationDurabilityError,
+    admitted_directory,
+    replacement_file,
+    sync_directory,
+)
 
 STORE_MAX_BYTES = 16 * 1024**2
 # Recoverable well-formedness errors that feedparser's lenient fallback repairs
@@ -99,29 +106,38 @@ REFRESH_INTENT = ".pdcst-refresh-intent.json"
 AUDIO_INTENT = ".pdcst-download-intent.json"
 
 
-def write_intent(path, details):
+def write_intent(path, details, *, directory_fd=None):
     """Durably record recovery paths before publishing any affected generation."""
-    with replacement_file(path, binary=True) as output:
+    with replacement_file(path, binary=True, directory_fd=directory_fd) as output:
         output.write(json.dumps(details).encode("utf-8"))
 
 
-def clear_intent(path):
+def clear_intent(path, *, directory_fd=None):
     try:
-        path.unlink()
+        if directory_fd is None:
+            path.unlink()
+        else:
+            os.unlink(path.name, dir_fd=directory_fd)
     except FileNotFoundError:
         return
-    sync_directory(path.parent)
+    if directory_fd is None:
+        sync_directory(path.parent)
+    else:
+        sync_directory(path.parent, directory_fd=directory_fd)
 
 
 @contextmanager
-def advisory_lock(path):
+def advisory_lock(path, *, directory_fd=None):
     """Admit a stable regular inode and wait for it under a monotonic budget."""
     descriptor = None
     deadline = time.monotonic() + settings.lock_wait_seconds
     try:
         try:
             descriptor = os.open(
-                path, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW, 0o666
+                path.name if directory_fd is not None else path,
+                os.O_RDWR | os.O_CREAT | os.O_NONBLOCK | os.O_NOFOLLOW,
+                0o666,
+                **({"dir_fd": directory_fd} if directory_fd is not None else {}),
             )
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
@@ -137,7 +153,11 @@ def advisory_lock(path):
                     break
                 except BlockingIOError:
                     time.sleep(min(0.05, remaining))
-            named = path.lstat()
+            named = os.stat(
+                path.name if directory_fd is not None else path,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
             if not stat.S_ISREG(named.st_mode) or (info.st_dev, info.st_ino) != (
                 named.st_dev,
                 named.st_ino,
@@ -267,6 +287,47 @@ class JsonRepository:
     and maybe get/update/remove them.
     """
 
+    _directory_fd = None
+
+    def _local(self, path):
+        return path.name if self._directory_fd is not None else path
+
+    def _stat(self, path):
+        return os.stat(
+            self._local(path), dir_fd=self._directory_fd, follow_symlinks=False
+        )
+
+    def _exists(self, path):
+        try:
+            self._stat(path)
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _unlink(self, path):
+        try:
+            os.unlink(
+                self._local(path),
+                **(
+                    {"dir_fd": self._directory_fd}
+                    if self._directory_fd is not None
+                    else {}
+                ),
+            )
+        except FileNotFoundError:
+            pass
+
+    def _replace(self, source, target):
+        os.replace(
+            self._local(source),
+            self._local(target),
+            src_dir_fd=self._directory_fd,
+            dst_dir_fd=self._directory_fd,
+        )
+
+    def _sync(self):
+        sync_directory(self.base_dir, directory_fd=self._directory_fd)
+
     def __init__(self, base_dir):
         self.base_dir = Path(str(base_dir))
         try:
@@ -284,7 +345,15 @@ class JsonRepository:
     def _read_bytes(self):
         """Read one bounded regular-file generation, or None for a missing store."""
         try:
-            descriptor = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            descriptor = os.open(
+                self._local(self.path),
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                **(
+                    {"dir_fd": self._directory_fd}
+                    if self._directory_fd is not None
+                    else {}
+                ),
+            )
         except FileNotFoundError:
             return None
         except OSError:
@@ -363,7 +432,7 @@ class JsonRepository:
         markers = []
         for name in (REFRESH_INTENT, AUDIO_INTENT):
             marker = self.base_dir / name
-            if marker.exists() or marker.is_symlink():
+            if self._exists(marker):
                 markers.append(marker)
         return markers
 
@@ -425,8 +494,16 @@ class JsonRepository:
 
     @contextmanager
     def _lock(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with advisory_lock(self._lock_path()):
+        if self._directory_fd is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        with advisory_lock(
+            self._lock_path(),
+            **(
+                {"directory_fd": self._directory_fd}
+                if self._directory_fd is not None
+                else {}
+            ),
+        ):
             self.__dict__["_lock_depth"] = self.__dict__.get("_lock_depth", 0) + 1
             try:
                 self._check_intents()
@@ -467,7 +544,9 @@ class JsonRepository:
 
     def _write_models(self, locked):
         serialized = self._serialize_models(locked)
-        with replacement_file(self.path, binary=True) as output:
+        with replacement_file(
+            self.path, binary=True, directory_fd=self._directory_fd
+        ) as output:
             output.write(serialized)
 
     def add(self, model):
@@ -509,7 +588,7 @@ class EpisodeRepository(JsonRepository):
         """Admit bounded completed bytes through a nonblocking, no-follow fd."""
         try:
             info = os.fstat(descriptor)
-            named = stage.lstat()
+            named = self._stat(stage)
         except OSError:
             raise DownloadConflict(
                 "Audio stage unavailable or generation changed"
@@ -525,11 +604,10 @@ class EpisodeRepository(JsonRepository):
             raise DownloadConflict("Audio stage generation changed")
         return info
 
-    @staticmethod
-    def _audio_destination_info(target):
+    def _audio_destination_info(self, target):
         """An existing owned destination must be a regular, non-link file."""
         try:
-            info = target.lstat()
+            info = self._stat(target)
         except FileNotFoundError:
             return None
         if not stat.S_ISREG(info.st_mode):
@@ -538,8 +616,6 @@ class EpisodeRepository(JsonRepository):
 
     def _download_record(self, locked, guid, audio_url, name):
         """Validate identity and exclusive ownership while holding the JSON lock."""
-        from . import contained_path
-
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
         if name.casefold() in reserved or name.casefold().startswith(
             (".pdcst-download-", ".pdcst-refresh-")
@@ -547,11 +623,17 @@ class EpisodeRepository(JsonRepository):
             raise DownloadConflict(
                 "Episode filename is reserved for repository storage"
             )
-        if Path(name).name != name:
+        if (
+            not name
+            or name in {".", ".."}
+            or "\\" in name
+            or PureWindowsPath(name).drive
+            or Path(name).name != name
+        ):
             raise DownloadConflict("Episode name must be a single relative file name")
-        if (self.base_dir / name).is_symlink():
+        target = self.base_dir / name
+        if self._exists(target) and stat.S_ISLNK(self._stat(target).st_mode):
             raise DownloadConflict("Audio destination must not be a symlink")
-        target = contained_path(self.base_dir, name)
         self._audio_destination_info(target)
         current = locked.get(guid)
         if current is None or current.audio_url != audio_url:
@@ -563,7 +645,12 @@ class EpisodeRepository(JsonRepository):
             return unicodedata.normalize("NFC", value).casefold()
 
         def path_key(filename):
-            return name_key(str(contained_path(self.base_dir, filename)))
+            if Path(filename).name != filename or "\\" in filename:
+                raise ValueError("Unsafe audio association")
+            path = self.base_dir / filename
+            if self._exists(path) and not stat.S_ISREG(self._stat(path).st_mode):
+                raise ValueError("Unsafe audio association")
+            return name_key(filename)
 
         key = path_key(name)
         for row in locked.values():
@@ -580,36 +667,74 @@ class EpisodeRepository(JsonRepository):
                 )
         owned = current.audio_file == name
         # Conservative case folding gives the same refusal policy on every host.
-        if not owned and (
-            target.exists()
-            or any(name_key(p.name) == name_key(name) for p in self.base_dir.iterdir())
-        ):
+        occupied = self._exists(target)
+        if not owned and not occupied:
+            with self._directory_entries() as entries:
+                occupied = any(name_key(p.name) == name_key(name) for p in entries)
+        if not owned and occupied:
             raise DownloadConflict(
                 "Audio destination contains an unowned existing file"
             )
         return current, target
 
+    def _directory_entries(self):
+        # scandir(fd) duplicates the fd; the iterator owns only that duplicate.
+        return os.scandir(
+            self._directory_fd if self._directory_fd is not None else self.base_dir
+        )
+
     def download_episode(self, episode, name, transfer):
+        """Transfer callbacks must use the supplied directory_fd for stage IO."""
+        try:
+            with admitted_directory(self.base_dir) as (descriptor, check):
+                admitted = copy(self)
+                admitted._directory_fd = descriptor
+
+                return admitted._download_in_directory(episode, name, transfer, check)
+        except DirectoryAdmissionError:
+            raise DownloadConflict(
+                "Episode directory identity changed; retry download"
+            ) from None
+
+    def _download_in_directory(self, episode, name, transfer, check_directory):
         """Claim audio, transfer outside the JSON lock, then commit only its link."""
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        check = check_directory
+
+        def check_directory():
+            try:
+                check()
+            except DirectoryAdmissionError:
+                raise DownloadConflict(
+                    "Episode directory identity changed; retry download"
+                ) from None
+
         claim = self.path.with_suffix(self.path.suffix + ".download.lock")
-        with advisory_lock(claim):
+        with advisory_lock(claim, directory_fd=self._directory_fd):
+            check_directory()
             # Closing the descriptor releases the claim even when transfer fails.
             with self._lock():
                 self._download_record(
                     self._fetch_all(), episode.guid, episode.audio_url, name
                 )
+            check_directory()
             stage = self.base_dir / f".pdcst-download-{uuid4().hex}"
-            descriptor = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            descriptor = os.open(
+                stage.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o666,
+                dir_fd=self._directory_fd,
+            )
             os.close(descriptor)
             completed = False
             rollback_failed = False
             stage_descriptor = None
             try:
-                transfer(episode.audio_url, stage)
+                transfer(episode.audio_url, stage, directory_fd=self._directory_fd)
                 try:
                     stage_descriptor = os.open(
-                        stage, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                        stage.name,
+                        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                        dir_fd=self._directory_fd,
                     )
                 except OSError:
                     raise DownloadConflict(
@@ -617,11 +742,13 @@ class EpisodeRepository(JsonRepository):
                     ) from None
                 stage_info = self._audio_stage_info(stage, stage_descriptor)
                 completed = True
+                check_directory()
                 with self._lock():
                     locked = self._fetch_all()
                     current, target = self._download_record(
                         locked, episode.guid, episode.audio_url, name
                     )
+                    check_directory()
                     target_info = self._audio_destination_info(target)
                     if self._audio_generation(
                         self._audio_stage_info(stage, stage_descriptor)
@@ -656,6 +783,7 @@ class EpisodeRepository(JsonRepository):
                     published = False
                     previous_moved = False
                     intent = self.base_dir / AUDIO_INTENT
+                    check_directory()
                     write_intent(
                         intent,
                         {
@@ -665,8 +793,10 @@ class EpisodeRepository(JsonRepository):
                             "stage": str(stage),
                             "backup": str(backup) if backup is not None else None,
                         },
+                        directory_fd=self._directory_fd,
                     )
                     try:
+                        check_directory()
                         if self._audio_generation(
                             self._audio_destination_info(target)
                         ) != self._audio_generation(target_info):
@@ -678,15 +808,16 @@ class EpisodeRepository(JsonRepository):
                         ) != self._audio_generation(stage_info):
                             raise DownloadConflict("Audio stage generation changed")
                         if backup is not None:
-                            os.replace(target, backup)
+                            self._replace(target, backup)
                             previous_moved = True
                         if self._audio_generation(
                             self._audio_stage_info(stage, stage_descriptor)
                         ) != self._audio_generation(stage_info):
                             raise DownloadConflict("Audio stage generation changed")
-                        os.replace(stage, target)
+                        self._replace(stage, target)
                         published = True
-                        sync_directory(self.base_dir)
+                        self._sync()
+                        check_directory()
                         current.audio_file = name
                         self._write_models(locked)
                     except PublicationDurabilityError:
@@ -702,20 +833,20 @@ class EpisodeRepository(JsonRepository):
                         # Never overwrite completed bytes if moving them aside fails.
                         if published:
                             try:
-                                os.replace(target, stage)
+                                self._replace(target, stage)
                             except BaseException:
                                 rollback_failed = True
                             else:
                                 published = False
                         if previous_moved and not published:
                             try:
-                                os.replace(backup, target)
+                                self._replace(backup, target)
                             except BaseException:
                                 rollback_failed = True
                         try:
-                            sync_directory(self.base_dir)
+                            self._sync()
                             if not rollback_failed:
-                                clear_intent(intent)
+                                clear_intent(intent, directory_fd=self._directory_fd)
                         except BaseException:
                             rollback_failed = True
                         raise
@@ -723,7 +854,7 @@ class EpisodeRepository(JsonRepository):
                         # The matching audio and JSON are both durable. A crash
                         # after this point needs at most orphan-backup cleanup.
                         try:
-                            clear_intent(intent)
+                            clear_intent(intent, directory_fd=self._directory_fd)
                         except OSError:
                             retained = (
                                 f"previous audio retained at {backup}; "
@@ -741,8 +872,8 @@ class EpisodeRepository(JsonRepository):
                             return target
                         if backup is not None:
                             try:
-                                backup.unlink()
-                                sync_directory(self.base_dir)
+                                self._unlink(backup)
+                                self._sync()
                             except OSError:
                                 warnings.warn(
                                     "Download completed; cleanup could not remove or "
@@ -767,7 +898,7 @@ class EpisodeRepository(JsonRepository):
                         RuntimeWarning,
                         stacklevel=2,
                     )
-                elif completed and stage.exists():
+                elif completed and self._exists(stage):
                     recovery = f"completed audio retained at {stage}"
                     if isinstance(error, DownloadConflict):
                         try:
@@ -788,12 +919,12 @@ class EpisodeRepository(JsonRepository):
                     # A callback may have replaced the stage with a directory.
                     # Never traverse/remove its contents or mask the refusal.
                     try:
-                        info = stage.lstat()
+                        info = self._stat(stage)
                     except FileNotFoundError:
                         pass
                     else:
                         if not stat.S_ISDIR(info.st_mode):
-                            stage.unlink(missing_ok=True)
+                            self._unlink(stage)
 
     def _usable_audio_files(self, locked):
         """Retain only regular, non-symlink files with one unambiguous owner."""

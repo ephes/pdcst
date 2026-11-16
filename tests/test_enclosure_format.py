@@ -38,7 +38,7 @@ def test_enclosure_type_roundtrip_and_download(
     assert reloaded.audio_file_name == f"1.{suffix}"
     calls = []
 
-    def transfer(enclosure, stage):
+    def transfer(enclosure, stage, **kwargs):
         calls.append(enclosure)
         stage.write_bytes(b"synthetic audio")
 

@@ -21,18 +21,18 @@ home = pdcst.settings.root
 role = sys.argv[1]
 lock = repository.advisory_lock
 @contextmanager
-def intercepted(path):
+def intercepted(path, **kwargs):
     if path.name.endswith('.download.lock') and role == 'successor':
         (home / 'claim-waiting').touch()
-        with lock(path):
+        with lock(path, **kwargs):
             (home / 'claim-acquired').touch()
             sys.stdin.readline()
             yield
     else:
-        with lock(path):
+        with lock(path, **kwargs):
             yield
 repository.advisory_lock = intercepted
-def transfer(url, stage):
+def transfer(url, stage, **kwargs):
     (home / (role + '-transfer')).write_text(url)
     if role == 'owner':
         (home / 'owner-ready').touch()

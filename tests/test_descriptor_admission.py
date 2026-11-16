@@ -64,7 +64,7 @@ else:
     from contextlib import contextmanager
     @contextmanager
     def download():
-        def transfer(url, stage):
+        def transfer(url, stage, **kwargs):
             print("acquired", flush=True)
             if mode == "hold":
                 sys.stdin.readline()

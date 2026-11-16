@@ -1,5 +1,11 @@
 # Unreleased
 
+* Anchor downloads (claims, stages, metadata, intents, publication and rollback)
+  to no-follow directory descriptors. Refuse replaced directory components
+  before commit, preserving old JSON/audio without touching replacement trees.
+  Transfer callbacks now receive a borrowed `directory_fd` keyword and must use
+  it for stage access; the built-in HTTP transfer supports this contract.
+
 * Reserve subscription directory components for metadata, intents, recovery files
   and feed/download locks, including case variants and resolved aliases; reject
   explicit control paths before creating locks or fetching the feed.

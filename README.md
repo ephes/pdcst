@@ -281,8 +281,25 @@ limits the title to 100 characters and `{index:>3}` right-aligns the index.
 Other format syntax is refused before formatting. Patterns are limited to 4,096
 characters and the complete basename to 255 UTF-8 bytes, including literals and
 repeated fields; excess output is rejected rather than truncated. Existing
-subscriptions with unsafe paths must be corrected before use. Containment assumes other local
-processes do not change directory symlinks while a command is running.
+subscriptions with unsafe paths must be corrected before use. Downloads open each
+component of the admitted episode directory without following symlinks and keep
+the directory descriptors until completion. Claims, transfer stages, metadata,
+intents, publication and rollback use that admitted directory. A replaced root,
+ancestor or episode directory refuses publication; previous JSON and audio stay
+paired in the admitted (possibly renamed) directory. The replacement tree is
+untouched. Stop other local writers, restore the original directory layout and
+inspect retained stages before retrying; recovery paths refer to the original
+layout. Subscription/refresh pathname containment still assumes other local
+processes do not change directory symlinks while those commands run.
+
+Library transfer callbacks for `EpisodeRepository.download_episode` now receive
+`transfer(url, stage_path, *, directory_fd=...)`. The path is for naming and
+diagnostics; callbacks must use `stage_path.name` with the supplied `dir_fd` for
+all file access, or use `replacement_file(stage_path, binary=True,
+directory_fd=directory_fd)`. Do not close that borrowed descriptor or reopen the
+stage through its full pathname. The built-in `download_with_progress` accepts
+this keyword and follows the contract. Standalone calls without it retain their
+pathname interface.
 
 Downloads require an HTTP success response and follow at most five redirects.
 Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
