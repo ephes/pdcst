@@ -484,7 +484,10 @@ including episode listing and download; a refresh root marker also blocks
 subscription browsing and all subscriptions. The error names the marker. Writers publish
 and retire their markers while holding the owning store lock (the episode store
 lock for episode-directory markers, the subscription store lock for the root
-marker). A command that sees a marker waits for that lock, within the lock wait
+marker). Readers check markers before and after reading bytes. A marker appearing during
+a read discards those bytes; after waiting for its owner lock, the reader rereads
+a settled generation under that lock. This does not provide a multi-store atomic
+read. A command that sees a marker waits for that lock, within the lock wait
 limit, and checks again: an in-progress publication only delays it, while a
 marker still present under the lock is unresolved. If the wait limit expires or
 the lock cannot be opened (for example a read-only store) while the marker is

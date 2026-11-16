@@ -1,5 +1,8 @@
 # Unreleased
 
+* Fence metadata reads with a post-read publication-intent check; wait/recheck
+  and reread under the owner lock rather than accepting overlapping bytes.
+
 * Preflight generated filenames across incoming and retained episodes, refusing
   Unicode/case-equivalent collisions before publishing either metadata store.
 

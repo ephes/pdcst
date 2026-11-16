@@ -371,6 +371,22 @@ class JsonRepository:
     def _fetch_all(self):
         self._check_intents()
         data = self._read_bytes()
+        markers = self._intent_markers()
+        if markers:
+            if self.__dict__.get("_lock_depth"):
+                self._check_intents()
+            try:
+                # The first bytes may overlap a publication. Wait/recheck using
+                # its owner lock and reread a settled generation while holding it.
+                with self._lock():
+                    data = self._read_bytes()
+            except StoreWriteError as error:
+                raise StoreReadError(
+                    self.path,
+                    f"publication marker {markers[0]} observed during read and its "
+                    f"lock is unavailable ({error}); retry later, or follow README "
+                    "interrupted-publication recovery",
+                ) from error
         if data is None:
             return {}
         try:
