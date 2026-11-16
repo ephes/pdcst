@@ -66,7 +66,13 @@ an enclosure without a media type may be used when its URL path ends in .mp3,
 are ignored). Explicit types outside the supported list are rejected, even with
 an audio extension. Enclosure URLs containing whitespace are rejected.
 Unusable entries are skipped with a warning reporting their count; valid sibling
-episodes remain available and receive contiguous chronological indices.
+episodes remain available. On first import they receive chronological indices
+(with GUID order breaking equal-date ties). Refresh retains every stored GUID and
+its index, including entries absent from a rolling feed. New GUIDs receive indices
+after the retained maximum in date/GUID order, even for newly discovered older
+episodes. Listing follows stored index order; subscription counts describe the
+retained inventory, not just the current feed window. Download associations keep
+their existing filenames.
 The selected enclosure's supported type is retained as optional `audio_media_type`
 in episode JSON. Filename generation keeps recognized URL path suffixes stable
 (case insensitive, excluding query strings). Otherwise it uses this MIME mapping:

@@ -122,12 +122,16 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                 settings.root, podcast.directory, podcast.get_audio_file_name(episode)
             )
         locked = podcasts_repo._fetch_all()
-        stored = podcasts_repo.storage_model_type(**podcast.dict())
-        locked[stored.pk] = stored
-        podcasts_repo._serialize_models(locked)
-        # Import under the episode lock before publishing its subscription pointer.
+
+        def prepare(episodes_by_guid):
+            podcast.episodes_count = len(episodes_by_guid)
+            stored = podcasts_repo.storage_model_type(**podcast.dict())
+            locked[stored.pk] = stored
+            podcasts_repo._serialize_models(locked)
+
+        # Preflight the retained count under both locks before either publication.
         with EpisodeRepository(episode_dir).subscription_import(
-            episodes, podcasts_repo
+            episodes, podcasts_repo, prepare=prepare
         ):
             podcasts_repo._write_models(locked)
     return podcast

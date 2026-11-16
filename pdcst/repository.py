@@ -803,19 +803,30 @@ class EpisodeRepository(JsonRepository):
             if names[key] == 1 and files[identity] == 1
         }
 
-    def _import_locked(self, models, locked):
+    def _merge_import(self, models, locked):
         incoming = index_unique(
             [self.storage_model_type(**model.dict()) for model in models],
             lambda model: model.pk,
         )
         usable = self._usable_audio_files(locked)
-        for model in incoming.values():
+        next_index = max((row.index for row in locked.values()), default=0) + 1
+        for model in sorted(
+            incoming.values(), key=lambda row: (row.published, row.guid)
+        ):
             previous = locked.get(model.pk)
+            if previous is not None:
+                model.index = previous.index
+            else:
+                model.index = next_index
+                next_index += 1
             model.audio_file = None
             if previous and previous.audio_url == model.audio_url:
                 model.audio_file = usable.get(model.pk)
             locked[model.pk] = model
-        self._write_models(locked)
+        return dict(sorted(locked.items(), key=lambda item: (item[1].index, item[0])))
+
+    def _import_locked(self, models, locked):
+        self._write_models(self._merge_import(models, locked))
 
     def import_list(self, models):
         """Refresh feed metadata while retaining usable local download state."""
@@ -823,10 +834,12 @@ class EpisodeRepository(JsonRepository):
             self._import_locked(models, self._fetch_all())
 
     @contextmanager
-    def subscription_import(self, models, podcasts_repo=None):
+    def subscription_import(self, models, podcasts_repo=None, prepare=None):
         """Fence an interrupted pair until an operator settles its generations."""
         with self._lock():
-            locked = self._fetch_all()
+            locked = self._merge_import(models, self._fetch_all())
+            if prepare is not None:
+                prepare(locked)
             previous = self._read_bytes()
             token = uuid4().hex
             backup = self.base_dir / f".pdcst-refresh-{token}.previous"
@@ -868,7 +881,7 @@ class EpisodeRepository(JsonRepository):
                     sync_directory(podcasts_repo.base_dir)
                 for path in markers:
                     write_intent(path, details)
-                self._import_locked(models, locked)
+                self._write_models(locked)
                 imported = True
                 yield
             except BaseException as error:
