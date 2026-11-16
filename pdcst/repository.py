@@ -309,16 +309,47 @@ class JsonRepository:
         """Descriptor-bound operations replace this with their identity checker."""
 
     @contextmanager
-    def admitted(self, *, create=True):
-        """Use an isolated repository view bound to one held directory."""
+    def admitted(self, *, create=True, parent=None):
+        """Use an isolated repository view bound to one held directory.
+
+        A directory below an admitted parent repository is opened relative to
+        the parent's held descriptor, and its checker also checks the parent.
+        """
         if self._directory_fd is not None:
             self._check_directory()
             yield self
             return
+        relative = None
+        if parent is not None and parent._directory_fd is not None:
+            parent._check_directory()
+            try:
+                relative = self.base_dir.relative_to(parent.base_dir)
+            except ValueError:
+                relative = None
+            if relative is not None and not relative.parts:
+                relative = None
         try:
-            with admitted_directory(
-                self.base_dir, create=create, label=self._directory_label
-            ) as (descriptor, check):
+            if relative is None:
+                admission = admitted_directory(
+                    self.base_dir, create=create, label=self._directory_label
+                )
+            else:
+                admission = admitted_directory(
+                    relative,
+                    create=create,
+                    parent_fd=parent._directory_fd,
+                    label=self._directory_label,
+                )
+            with admission as (descriptor, held):
+                if relative is None:
+                    check = held
+                else:
+
+                    def check():
+                        parent._check_directory()
+                        held()
+
+                    check()
                 admitted = copy(self)
                 admitted._directory_fd = descriptor
                 admitted._check_directory = check
@@ -1120,8 +1151,7 @@ class EpisodeRepository(JsonRepository):
     def subscription_import(self, models, podcasts_repo=None, prepare=None):
         """Fence an interrupted pair until an operator settles its generations."""
         if podcasts_repo is not None and self._directory_fd is None:
-            podcasts_repo._check_directory()
-            with self.admitted() as admitted:
+            with self.admitted(parent=podcasts_repo) as admitted:
                 with admitted.subscription_import(models, podcasts_repo, prepare):
                     yield
             return
@@ -1169,6 +1199,9 @@ class EpisodeRepository(JsonRepository):
                 self._sync()
                 if podcasts_repo is not None:
                     podcasts_repo._sync()
+                # Check every held directory before the first intent exists.
+                for repo, _ in markers:
+                    repo._check_directory()
                 for repo, path in markers:
                     repo._check_directory()
                     write_intent(

@@ -11,7 +11,9 @@
   browsing a missing root still creates nothing. The CLI resolves `PDCST_HOME`
   before admission so symlinked ancestors keep working, and admission errors name
   the storage root, episode or feed lock directory. Identity changes while a feed
-  lock is held are no longer reported as lock acquisition failures.
+  lock is held are no longer reported as lock acquisition failures. Refresh opens
+  the episode directory relative to the held root, so a root replaced during
+  admission receives no directories, locks, backups or intents.
 
 * Refuse unsolicited partial audio responses (including Content-Range on HTTP
   200) before staging. Preserve existing audio/metadata for a full-response retry.

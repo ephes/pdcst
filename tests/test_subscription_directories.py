@@ -179,3 +179,43 @@ def test_symlinked_storage_root_ancestor_is_resolved(
     pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser())
     assert [show.title for show in pdcst.list_all_podcasts()] == [podcast.title]
     assert (real / "home" / "podcasts.json").is_file()
+
+
+def test_root_replaced_during_episode_admission_leaves_replacement_untouched(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst import repository
+
+    root, moved = tmp_path / "home", tmp_path / "admitted"
+    monkeypatch.setattr(pdcst.settings, "root", root)
+    shows = PodcastRepository(root)
+    shows.add(podcast)
+    before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*.json")}
+    swapped = []
+    admit = repository.admitted_directory
+
+    def intercept(path, **kwargs):
+        if not swapped and kwargs.get("label") == "Episode directory":
+            root.rename(moved)
+            root.mkdir()
+            for name, data in before.items():
+                (root / name).write_bytes(data)
+            swapped.append(True)
+        return admit(path, **kwargs)
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [episode]
+
+    monkeypatch.setattr(repository, "admitted_directory", intercept)
+    with pytest.raises(StoreWriteError, match="Storage root directory identity"):
+        pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+    assert swapped
+    assert sorted(p.relative_to(root) for p in root.rglob("*")) == sorted(before)
+    assert before == {
+        p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()
+    }
+    assert before == {
+        p.relative_to(moved): p.read_bytes() for p in moved.rglob("*.json")
+    }
+    assert not list(moved.rglob(".pdcst-refresh-*"))
