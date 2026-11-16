@@ -285,3 +285,40 @@ def test_complete_feed_with_tolerated_parser_warning_is_accepted(
     assert EpisodeRepository(tmp_path / podcast.directory).list()[0].guid == (
         "https://example.test/one"
     )
+
+
+@pytest.mark.parametrize("digits", ["9" * 5000, "0" * 5000 + "8388609"])
+def test_overlong_feed_length_refuses_before_body_and_preserves_stores(
+    tmp_path, monkeypatch, transport, podcast, episode, digits
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    EpisodeRepository(tmp_path / podcast.directory).add(episode)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+
+    class UnreadBody(httpx.SyncByteStream):
+        def __iter__(self):
+            pytest.fail("over-limit length must be refused before reading")
+
+    transport(
+        lambda _: httpx.Response(
+            200, headers={"Content-Length": digits}, stream=UnreadBody()
+        )
+    )
+    with pytest.raises(FeedError, match="Feed exceeds byte limit") as caught:
+        pdcst.subscribe(podcast.feed.url, "{title}", None, podcasts_repo=shows)
+    assert caught.value.__cause__ is caught.value.__context__ is None
+    assert len(str(caught.value)) < 100
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+
+
+def test_zero_padded_feed_length_is_accepted(transport):
+    transport(
+        lambda _: httpx.Response(
+            200,
+            headers={"Content-Length": "0" * 5000 + str(len(BODY))},
+            stream=httpx.ByteStream(BODY),
+        )
+    )
+    assert FeedParserRepository.fetch_document("https://example.test/feed").entries

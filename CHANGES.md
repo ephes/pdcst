@@ -1,5 +1,10 @@
 # Unreleased
 
+* Refuse unsolicited partial audio responses (including Content-Range on HTTP
+  200) before staging. Preserve existing audio/metadata for a full-response retry.
+* Compare feed Content-Length against its byte ceiling as normalized decimal
+  text, refusing huge values with a bounded FeedError and accepting leading zeros.
+
 * Bound unowned audio destination scans to a shared 10,000-entry/one-second
   active scan budget across admission and publication. Admission may use at
   most half, so folders that cannot also pass the publication recheck are

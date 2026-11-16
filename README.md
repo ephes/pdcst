@@ -120,7 +120,9 @@ new directory automatically. An unsafe legacy path does not block unrelated
 subscriptions, but must be corrected before using that subscription.
 
 Feed requests accept only successful HTTP responses, follow at most five redirects,
-and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejected.
+and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejected. Decimal Content-Length headers are compared
+against the byte ceiling without converting arbitrarily long integers; leading
+zeros are accepted.
 Acquisition checks a 30-second elapsed deadline across redirects and chunks, with
 HTTP operation timeouts of at most 10 seconds (a blocked operation may run until
 its timeout before the elapsed deadline is checked again). Fetch failures raise
@@ -175,6 +177,10 @@ $ pdcst download python rest
 ```
 
 Podcast and episode identifiers match title substrings without regard to case.
+Audio fetches require HTTP 200 without Content-Range. Unsolicited partial
+responses are refused before staging; previous audio and metadata survive and a
+full-response retry is supported.
+
 Downloads require a unique match for both titles; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact

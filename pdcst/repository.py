@@ -1368,12 +1368,13 @@ class FeedParserRepository:
                         if encoding.strip().lower() not in {"", "identity"}:
                             raise FeedError("Unsupported feed content encoding")
                         length = response.headers.get("content-length", "")
-                        if (
-                            length.isascii()
-                            and length.isdigit()
-                            and int(length) > cls.MAX_BYTES
-                        ):
-                            raise FeedError("Feed exceeds byte limit")
+                        if length.isascii() and length.isdigit():
+                            digits = length.lstrip("0") or "0"
+                            limit = str(cls.MAX_BYTES)
+                            if len(digits) > len(limit) or (
+                                len(digits) == len(limit) and digits > limit
+                            ):
+                                raise FeedError("Feed exceeds byte limit")
                         body = bytearray()
                         for chunk in response.iter_raw():
                             remaining()
