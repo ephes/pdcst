@@ -379,6 +379,18 @@ together, the previous audio backup is retained, and the command reports uncerta
 durability. Inspect these files before retrying; this is not a rollback or a
 crash-atomic transaction. A failure before JSON replacement restores prior audio.
 
+Once audio and JSON, or both refreshed metadata stores, have been published and
+synced, an intent-retirement unlink or directory-sync error is a **committed
+success with recovery cleanup pending**. The API returns the completed download
+path or refreshed podcast, and the CLI succeeds with a bounded warning naming
+the intent paths. Matching new data and remaining backups are kept; cleanup alone
+never triggers compensation. A marker may already be absent after a sync failure.
+Do not repeat the transfer or refresh. Stop all commands, inspect the named paths
+and retained generations, and follow Interrupted-publication recovery below to
+verify the committed generation and retire remaining markers/backups. An unresolved
+remaining marker continues to fence later reads. Backup-only refresh cleanup
+failures also warn without converting the committed refresh into a failure.
+
 Once audio and JSON have both been published and synced, failure to remove or
 sync the retirement of the previous backup is a cleanup warning: the download
 succeeds, and `download_episode` returns the completed destination path. The warning names the

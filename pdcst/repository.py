@@ -723,7 +723,18 @@ class EpisodeRepository(JsonRepository):
                     else:
                         # The matching audio and JSON are both durable. A crash
                         # after this point needs at most orphan-backup cleanup.
-                        clear_intent(intent)
+                        try:
+                            clear_intent(intent)
+                        except OSError:
+                            warnings.warn(
+                                "Download completed; recovery cleanup pending at "
+                                f"{intent}; previous audio retained at {backup}; "
+                                "stop all pdcst commands and follow README "
+                                "interrupted-publication recovery; do not repeat transfer",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                            return target
                         if backup is not None:
                             try:
                                 backup.unlink()
@@ -943,19 +954,41 @@ class EpisodeRepository(JsonRepository):
                     try:
                         for path in markers:
                             clear_intent(path)
-                    except BaseException:
+                    except BaseException as error:
                         if not pending_error:
-                            raise
-                        warnings.warn(
-                            f"Refresh recovery cleanup incomplete; inspect {marker}",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
+                            if not isinstance(error, OSError):
+                                raise
+                            warnings.warn(
+                                "Refresh completed; recovery cleanup pending at "
+                                + ", ".join(str(path) for path in markers)
+                                + "; metadata backups retained; stop all pdcst "
+                                "commands and follow README interrupted-publication "
+                                "recovery; do not repeat refresh",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
+                        else:
+                            warnings.warn(
+                                f"Refresh recovery cleanup incomplete; inspect {marker}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
                     else:
-                        backup.unlink(missing_ok=True)
-                        recovery.unlink(missing_ok=True)
-                        if podcast_backup is not None:
-                            podcast_backup.unlink(missing_ok=True)
+                        try:
+                            backup.unlink(missing_ok=True)
+                            recovery.unlink(missing_ok=True)
+                            if podcast_backup is not None:
+                                podcast_backup.unlink(missing_ok=True)
+                        except OSError:
+                            if pending_error:
+                                message = "Refresh recovery cleanup incomplete"
+                            else:
+                                message = "Refresh completed; backup cleanup incomplete"
+                            warnings.warn(
+                                f"{message}; inspect {backup}, {recovery}, {podcast_backup}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb

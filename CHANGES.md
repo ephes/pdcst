@@ -1,5 +1,9 @@
 # Unreleased
 
+* Report committed audio/paired-metadata publications with intent-retirement
+  failures as successful with recovery cleanup pending; preserve matching data
+  and remaining backups, name recovery actions, and avoid repeat transfers.
+
 * Fence metadata reads with a post-read publication-intent check; wait/recheck
   and reread under the owner lock rather than accepting overlapping bytes.
 
