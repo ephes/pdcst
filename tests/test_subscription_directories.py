@@ -53,8 +53,11 @@ def test_subscription_root_replaced_during_acquisition(
             }
         finally:
             resume.set()
-        with pytest.raises(StoreWriteError, match="directory.*changed"):
+        with pytest.raises(
+            StoreWriteError, match="Storage root directory identity changed"
+        ) as raised:
             result.result(5)
+    assert "feed lock" not in str(raised.value)
     assert snapshot == {
         p.relative_to(outside): p.read_bytes()
         for p in outside.rglob("*")
@@ -158,3 +161,21 @@ def test_direct_subscription_repository_uses_admitted_root(
             shows.add(podcast)
     assert (root / "podcasts.json").read_text() == "[]"
     assert (moved / "podcasts.json").read_bytes() == before
+
+
+def test_symlinked_storage_root_ancestor_is_resolved(
+    tmp_path, monkeypatch, podcast, episode
+):
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(pdcst.settings, "root", alias / "home")
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [episode]
+
+    pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser())
+    assert [show.title for show in pdcst.list_all_podcasts()] == [podcast.title]
+    assert (real / "home" / "podcasts.json").is_file()

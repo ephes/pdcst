@@ -77,8 +77,10 @@ def test_replaced_feed_lock_directory_refused_without_redirecting_lock(
             return podcast, [episode]
 
     monkeypatch.setattr(repository, "advisory_lock", intercept)
-    with pytest.raises(StoreWriteError, match="directory"):
+    with pytest.raises(StoreWriteError, match="Feed lock directory") as raised:
         pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+    # Only admission/acquisition failures are reported as lock acquisition.
+    assert ("Cannot acquire feed lock" in str(raised.value)) == (when != "fetch")
     assert swapped
     assert bool(fetched) == (when == "fetch")
     assert not list(directory.iterdir())

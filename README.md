@@ -301,6 +301,9 @@ must be readable. A symlinked component (including a library caller passing an
 unresolved path) is refused; the CLI passes resolved paths. Access or creation
 failures are reported with their system reason instead of as identity changes.
 Subscription metadata reads and writes also hold the admitted root directory.
+The CLI resolves the configured storage root (`PDCST_HOME`) first, so a
+symlinked ancestor such as macOS `/tmp` keeps working; errors name the storage
+root, episode or feed lock directory that failed.
 Refresh holds the episode directory as well: locks, backups, intents, replacements,
 cleanup and rollback use those descriptors. A changed root/ancestor refuses
 publication without writing into its replacement; rollback stays in the admitted

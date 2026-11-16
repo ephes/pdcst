@@ -8,7 +8,10 @@
 * Bind subscription metadata reads/writes and paired refresh backups, intents,
   publication, cleanup and rollback to held no-follow directories. Refuse changed
   root/ancestor identities before publication without touching replacement trees;
-  browsing a missing root still creates nothing.
+  browsing a missing root still creates nothing. The CLI resolves `PDCST_HOME`
+  before admission so symlinked ancestors keep working, and admission errors name
+  the storage root, episode or feed lock directory. Identity changes while a feed
+  lock is held are no longer reported as lock acquisition failures.
 
 * Refuse unsolicited partial audio responses (including Content-Range on HTTP
   200) before staging. Preserve existing audio/metadata for a full-response retry.

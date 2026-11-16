@@ -133,7 +133,7 @@ def _open_component(name, parent, *, search_only_ok):
 
 
 @contextmanager
-def admitted_directory(path, *, create=True, parent_fd=None):
+def admitted_directory(path, *, create=True, parent_fd=None, label="Episode directory"):
     """Open components without following links and retain their identities.
 
     Relative paths may start at a borrowed parent_fd; its owner must also check
@@ -141,7 +141,8 @@ def admitted_directory(path, *, create=True, parent_fd=None):
     All writes use the final fd. The checker rejects a renamed/replaced root or
     ancestor even when a replacement happens to contain identical metadata.
     Ancestors that grant only search permission are opened search-only where the
-    platform supports it; the final directory must be readable.
+    platform supports it; the final directory must be readable. The label names
+    the admitted directory in error messages.
     """
     from pathlib import Path
 
@@ -187,13 +188,13 @@ def admitted_directory(path, *, create=True, parent_fd=None):
         except OSError as error:
             if error.errno in _REPLACED_COMPONENT_ERRORS:
                 raise DirectoryIdentityChanged(
-                    "Episode directory path has a symlinked, non-directory or "
+                    f"{label} path has a symlinked, non-directory or "
                     "changed component; use a symlink-free path or restore the "
                     "directory layout"
                 ) from None
             reason = os.strerror(error.errno) if error.errno else "unknown error"
             raise DirectoryAdmissionError(
-                f"Episode directory cannot be opened or created ({reason})"
+                f"{label} cannot be opened or created ({reason})"
             ) from None
 
         def check():
@@ -206,12 +207,12 @@ def admitted_directory(path, *, create=True, parent_fd=None):
                         opened.st_ino,
                     ) != (named.st_dev, named.st_ino):
                         raise DirectoryIdentityChanged(
-                            "Episode directory identity changed; restore the "
+                            f"{label} identity changed; restore the "
                             "directory layout before retrying"
                         )
             except OSError:
                 raise DirectoryIdentityChanged(
-                    "Episode directory identity changed; restore the directory "
+                    f"{label} identity changed; restore the directory "
                     "layout before retrying"
                 ) from None
 

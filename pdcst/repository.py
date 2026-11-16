@@ -15,7 +15,7 @@ import time
 import unicodedata
 import warnings
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -303,6 +303,7 @@ class JsonRepository:
     """
 
     _directory_fd = None
+    _directory_label = "Storage directory"
 
     def _check_directory(self):
         """Descriptor-bound operations replace this with their identity checker."""
@@ -315,10 +316,9 @@ class JsonRepository:
             yield self
             return
         try:
-            with admitted_directory(self.base_dir, create=create) as (
-                descriptor,
-                check,
-            ):
+            with admitted_directory(
+                self.base_dir, create=create, label=self._directory_label
+            ) as (descriptor, check):
                 admitted = copy(self)
                 admitted._directory_fd = descriptor
                 admitted._check_directory = check
@@ -626,6 +626,8 @@ class EpisodeRepository(JsonRepository):
     """
     Store episodes metadata and audio files for a podcast.
     """
+
+    _directory_label = "Episode directory"
 
     @staticmethod
     def _audio_generation(info):
@@ -1279,6 +1281,8 @@ class PodcastRepository(JsonRepository):
     Store podcasts metadata.
     """
 
+    _directory_label = "Storage root directory"
+
     def _fetch_all(self):
         if self._directory_fd is not None:
             return super()._fetch_all()
@@ -1302,25 +1306,33 @@ class PodcastRepository(JsonRepository):
     def feed_lock(self, url):
         """Serialize one feed's acquisition through publication across processes."""
         name = sha256(url.encode("utf-8")).hexdigest() + ".lock"
-        try:
-            with self.admitted() as admitted:
-                with admitted_directory(
-                    ".feed-locks", parent_fd=admitted._directory_fd
-                ) as (descriptor, check_locks):
+        with self.admitted() as admitted, ExitStack() as stack:
+            # Only admission and acquisition are lock failures; identity errors
+            # raised by the caller while the lock is held keep their own label.
+            try:
+                descriptor, check_locks = stack.enter_context(
+                    admitted_directory(
+                        ".feed-locks",
+                        parent_fd=admitted._directory_fd,
+                        label="Feed lock directory",
+                    )
+                )
 
-                    def check():
-                        admitted._check_directory()
-                        check_locks()
+                def check():
+                    admitted._check_directory()
+                    check_locks()
 
-                    check()
-                    directory = self.base_dir / ".feed-locks"
-                    with advisory_lock(directory / name, directory_fd=descriptor):
-                        check()
-                        locked = copy(admitted)
-                        locked._check_directory = check
-                        yield locked
-        except DirectoryAdmissionError as error:
-            raise StoreWriteError(f"Cannot acquire feed lock: {error}") from None
+                check()
+                directory = self.base_dir / ".feed-locks"
+                stack.enter_context(
+                    advisory_lock(directory / name, directory_fd=descriptor)
+                )
+                check()
+            except DirectoryAdmissionError as error:
+                raise StoreWriteError(f"Cannot acquire feed lock: {error}") from None
+            locked = copy(admitted)
+            locked._check_directory = check
+            yield locked
 
     def list(self, additional_attributes=None):
         from . import contained_path
