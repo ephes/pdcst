@@ -306,7 +306,7 @@ def test_completed_audio_has_recovery_diagnostic_on_filesystem_error(
         if operation == "replace":
             patch.setattr("pdcst.repository.os.replace", fail)
         else:
-            patch.setattr(Path, "chmod", fail)
+            patch.setattr("pdcst.repository.os.fchmod", fail)
         with pytest.warns(RuntimeWarning, match="completed audio retained at"):
             with pytest.raises(OSError, match="synthetic publication"):
                 pdcst.download("show", "first")
