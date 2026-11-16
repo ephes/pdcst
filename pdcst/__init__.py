@@ -87,10 +87,11 @@ def subscribe(
     if fp_repo is None:
         fp_repo = FeedParserRepository()
     if podcasts_repo is None:
-        podcasts_repo = PodcastRepository(settings.root)
-    podcasts_repo._check_intents()
-    with podcasts_repo.feed_lock(feed_url):
-        return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo)
+        podcasts_repo = PodcastRepository(Path(settings.root).resolve())
+    with podcasts_repo.admitted() as admitted:
+        admitted._check_intents()
+        with admitted.feed_lock(feed_url) as locked:
+            return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, locked)
 
 
 def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
@@ -176,7 +177,7 @@ def list_all_podcasts(podcasts=None) -> list[Podcast]:
     List all podcasts.
     """
     if podcasts is None:
-        podcasts = PodcastRepository(settings.root)
+        podcasts = PodcastRepository(Path(settings.root).resolve())
     return podcasts.list()
 
 

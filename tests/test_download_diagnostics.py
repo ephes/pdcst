@@ -29,6 +29,8 @@ URL = (
         ("duration", "Audio download duration limit exceeded"),
         ("encoded", "Unsupported media content encoding"),
         ("short", "Incomplete media response"),
+        ("partial", "Incomplete media response"),
+        ("range-header", "Incomplete media response"),
     ],
 )
 def test_cli_download_errors_are_private_and_preserve_state(
@@ -60,7 +62,11 @@ def test_cli_download_errors_are_private_and_preserve_state(
             if case == "chunked":
                 yield b"too large"
 
+    retry = [False]
+
     def respond(request):
+        if retry[0]:
+            return httpx.Response(200, stream=httpx.ByteStream(b"complete"))
         if case == "timeout":
             raise httpx.ReadTimeout(f"Private failure: {URL}", request=request)
         if case == "403":
@@ -76,7 +82,11 @@ def test_cli_download_errors_are_private_and_preserve_state(
             headers["Content-Encoding"] = "gzip"
         if case == "short":
             headers["Content-Length"] = "7"
-        return httpx.Response(200, headers=headers, stream=Stream())
+        if case in {"partial", "range-header"}:
+            headers.update({"Content-Length": "4", "Content-Range": "bytes 0-3/8"})
+        return httpx.Response(
+            206 if case == "partial" else 200, headers=headers, stream=Stream()
+        )
 
     client = httpx.Client
     monkeypatch.setattr(
@@ -96,6 +106,11 @@ def test_cli_download_errors_are_private_and_preserve_state(
     assert repo.path.read_bytes() == before
     assert not list(repo.base_dir.glob(".pdcst-download-*"))
     assert not list(repo.base_dir.glob("*.tmp"))
+    if case in {"partial", "range-header"}:
+        retry[0] = True
+        result = CliRunner().invoke(pdcst.cli, ["download", "show", "episode"])
+        assert result.exit_code == 0, result.output
+        assert target.read_bytes() == b"complete"
 
 
 def test_transport_api_exception_chain_omits_private_values(tmp_path, monkeypatch):

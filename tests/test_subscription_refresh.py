@@ -1,5 +1,6 @@
 import copy
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -204,11 +205,11 @@ def test_episode_import_failure_keeps_subscription(
 
         replace = os.replace
 
-        def fail_replace(source, target):
-            if target == episodes.path:
+        def fail_replace(source, target, **kwargs):
+            if Path(target).name == episodes.path.name:
                 injected.append("replace")
                 raise OSError("injected replace")
-            return replace(source, target)
+            return replace(source, target, **kwargs)
 
         monkeypatch.setattr(os, "replace", fail_replace)
 
@@ -254,11 +255,11 @@ def test_subscription_publish_failure_is_retryable(
     replace = os.replace
     injected = []
 
-    def fail_publish(source, target):
-        if target == repo.path:
+    def fail_publish(source, target, **kwargs):
+        if Path(target).name == repo.path.name:
             injected.append(True)
             raise OSError("injected publication")
-        return replace(source, target)
+        return replace(source, target, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(os, "replace", fail_publish)
@@ -418,14 +419,14 @@ def test_refresh_compensation_failure_retains_both_generations(
     replace = os.replace
     publications = []
 
-    def fail(source, target):
-        if target == repo.path:
+    def fail(source, target, **kwargs):
+        if Path(target).name == repo.path.name:
             raise OSError("subscription failed")
-        if target == episodes.path:
+        if Path(target).name == episodes.path.name:
             publications.append(True)
             if len(publications) == 2:
                 raise OSError("compensation failed")
-        return replace(source, target)
+        return replace(source, target, **kwargs)
 
     monkeypatch.setattr(os, "replace", fail)
     with pytest.warns(RuntimeWarning, match="Refresh rollback incomplete"):

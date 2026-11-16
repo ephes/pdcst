@@ -159,7 +159,7 @@ def test_cli_store_errors_preserve_private_metadata(
         original_open = repository.os.open
 
         def denied(path, flags, *args, **kwargs):
-            if Path(path) == repo.path:
+            if Path(path).name == repo.path.name:
                 raise PermissionError("SIGNED_SENTINEL")
             return original_open(path, flags, *args, **kwargs)
 
@@ -228,24 +228,24 @@ def test_root_beneath_file_fails_concisely(tmp_path):
     assert parent.read_bytes() == b"untouched"
 
 
-def test_root_creation_denial_is_private(cli_store, monkeypatch):
+def test_feed_lock_directory_creation_denial_is_private(cli_store, monkeypatch):
     podcasts, episodes, podcast, _, forbidden = cli_store
     before = {p: p.read_bytes() for p in (podcasts.path, episodes.path)}
     attempted = []
-    original_mkdir = Path.mkdir
+    original_mkdir = os.mkdir
 
     def denied(path, *args, **kwargs):
-        if path == podcasts.base_dir / ".feed-locks":
+        if Path(path).name == ".feed-locks":
             attempted.append(path)
             raise PermissionError("SIGNED_SENTINEL")
         return original_mkdir(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "mkdir", denied)
+    monkeypatch.setattr(os, "mkdir", denied)
     monkeypatch.setattr(PodcastRepository, "_write_models", forbidden)
     result = CliRunner().invoke(pdcst.cli, ["add", podcast.feed.url], color=False)
     assert result.exit_code != 0
-    assert attempted == [podcasts.base_dir / ".feed-locks"]
-    assert "Unable to update local storage" in result.output
+    assert attempted == [".feed-locks"]
+    assert "Cannot acquire feed lock" in result.output
     assert "SIGNED_SENTINEL" not in result.output
     assert "Traceback" not in result.output
     assert len(result.output) < 1400

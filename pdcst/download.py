@@ -49,6 +49,8 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
         ) as response:
             check_deadline()
             response.raise_for_status()
+            if response.status_code != 200 or "Content-Range" in response.headers:
+                raise DownloadError("Incomplete media response")
             encoding = response.headers.get("Content-Encoding", "identity")
             if encoding.strip().lower() not in {"", "identity"}:
                 raise DownloadError("Unsupported media content encoding")

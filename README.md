@@ -120,7 +120,9 @@ new directory automatically. An unsafe legacy path does not block unrelated
 subscriptions, but must be corrected before using that subscription.
 
 Feed requests accept only successful HTTP responses, follow at most five redirects,
-and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejected.
+and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejected. Decimal Content-Length headers are compared
+against the byte ceiling without converting arbitrarily long integers; leading
+zeros are accepted.
 Acquisition checks a 30-second elapsed deadline across redirects and chunks, with
 HTTP operation timeouts of at most 10 seconds (a blocked operation may run until
 its timeout before the elapsed deadline is checked again). Fetch failures raise
@@ -175,6 +177,10 @@ $ pdcst download python rest
 ```
 
 Podcast and episode identifiers match title substrings without regard to case.
+Audio fetches require HTTP 200 without Content-Range. Unsolicited partial
+responses are refused before staging; previous audio and metadata survive and a
+full-response retry is supported.
+
 Downloads require a unique match for both titles; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact
@@ -294,8 +300,19 @@ where the platform supports it (`O_PATH`/`O_SEARCH`); the episode directory itse
 must be readable. A symlinked component (including a library caller passing an
 unresolved path) is refused; the CLI passes resolved paths. Access or creation
 failures are reported with their system reason instead of as identity changes.
-Subscription/refresh pathname containment still assumes other local
-processes do not change directory symlinks while those commands run.
+Subscription metadata reads and writes also hold the admitted root directory.
+The CLI resolves the configured storage root (`PDCST_HOME`) first, so a
+symlinked ancestor such as macOS `/tmp` keeps working; errors name the storage
+root, episode or feed lock directory that failed. A relative storage root passed
+by a library caller is made absolute when it is admitted.
+Refresh opens the episode directory relative to the held root and holds it as
+well (an episode path that no longer lies under the admitted root, for example
+after `PDCST_HOME` is retargeted during the fetch, is refused): locks, backups,
+intents, replacements,
+cleanup and rollback use those descriptors. A changed root/ancestor refuses
+publication without writing into its replacement; rollback stays in the admitted
+(possibly renamed) tree. Restore the original directory layout before retrying.
+Browsing a missing root still creates no directories.
 
 Before transferring into an unowned audio filename, download scans the admitted
 folder for Unicode/case-equivalent names. Admission and publication share a fixed
@@ -399,8 +416,9 @@ stage is refused while preserving the previous audio and metadata. Ordinary
 invalid stages are removed; a directory substituted at the reserved stage path
 is left intact for manual inspection and is never traversed or removed. These
 checks detect changes at admission/publication boundaries; they assume local
-processes do not replace entries after the final check or change directory
-symlinks during the command. They do not validate audio codecs.
+processes do not replace individual files after the final generation check.
+Directory operations remain bound to the admitted descriptors. These checks do
+not validate audio codecs.
 
 Downloads commit only the local filename against the current GUID and captured
 enclosure URL, preserving newer titles, dates and indices. If the episode disappears
@@ -515,7 +533,12 @@ an ordered two-file update, not a crash-atomic transaction. New directories and
 stable lock files may remain after a failed import.
 
 Feed refreshes hold a stable per-feed POSIX advisory lock in `.feed-locks/`
-from before acquisition until publication finishes. Concurrent refreshes of the
+from before acquisition until publication finishes. The directory is opened
+relative to the held storage root without following symlinks, and the hashed lock
+is opened through its directory descriptor. Symlinked lock directories, including
+in-root aliases, are refused before fetching; replacement while waiting or fetching
+refuses publication. Restore the admitted directory layout before retrying.
+Concurrent refreshes of the
 same URL wait and then fetch anew, so an older acquisition cannot overwrite a
 newer one. Different feeds acquire independently and share the subscription
 lock only during publication. Lock order is feed, subscription, then episode;

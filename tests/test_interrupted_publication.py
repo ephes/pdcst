@@ -88,7 +88,7 @@ def pause():
     sys.stdin.readline()
 def intercepted(source, target, **kwargs):
     replace(source, target, **kwargs)
-    if Path(target) == repo.path and sys.argv[1] == 'interrupted':
+    if Path(target).name == repo.path.name and sys.argv[1] == 'interrupted':
         pause()
 os.replace = intercepted
 pdcst.cli(['add', show.feed.url], standalone_mode=False)
@@ -201,15 +201,15 @@ def test_refresh_cleanup_failure_preserves_primary(publication_store, monkeypatc
     def fail_write(*_):
         raise primary
 
-    unlink = Path.unlink
+    unlink = os.unlink
 
     def fail_cleanup(path, *args, **kwargs):
-        if path.name == ".pdcst-refresh-intent.json":
+        if Path(path).name == ".pdcst-refresh-intent.json":
             raise OSError("synthetic cleanup failure")
         return unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(shows, "_write_models", fail_write)
-    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    monkeypatch.setattr(os, "unlink", fail_cleanup)
     with pytest.warns(RuntimeWarning, match="recovery cleanup incomplete"):
         with pytest.raises(TypeError) as raised:
             pdcst.subscribe(show.feed.url, "saved.mp3", None, Parser(), shows)

@@ -3,6 +3,7 @@
 import copy
 import os
 import stat
+from pathlib import Path
 
 import httpx
 import pytest
@@ -71,10 +72,10 @@ def test_rollback_restores_original_episode_file_mode(
     before = episodes.path.read_bytes()
     replace = storage_os.replace
 
-    def fail_subscription(source, target):
-        if target == podcasts.path:
+    def fail_subscription(source, target, **kwargs):
+        if Path(target).name == podcasts.path.name:
             raise OSError("subscription failed")
-        return replace(source, target)
+        return replace(source, target, **kwargs)
 
     previous_umask = os.umask(0o022)
     try:

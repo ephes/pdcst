@@ -164,6 +164,7 @@ def test_declared_length_numeric_domain(tmp_path, monkeypatch, length, expected)
     from contextlib import nullcontext
 
     response = SimpleNamespace(
+        status_code=200,
         headers={"Content-Length": length},
         raise_for_status=lambda: None,
         iter_raw=lambda: iter([b"data"]),

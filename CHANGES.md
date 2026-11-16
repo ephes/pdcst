@@ -1,5 +1,27 @@
 # Unreleased
 
+* Admit `.feed-locks` relative to the held subscription root without following
+  symlinks, acquire hashed locks through that descriptor, and recheck directory
+  identities after waiting and before publication. Refuse aliases/replacements
+  without redirecting locks or fetching through invalid lock authority.
+
+* Bind subscription metadata reads/writes and paired refresh backups, intents,
+  publication, cleanup and rollback to held no-follow directories. Refuse changed
+  root/ancestor identities before publication without touching replacement trees;
+  browsing a missing root still creates nothing. The CLI resolves `PDCST_HOME`
+  before admission so symlinked ancestors keep working, and admission errors name
+  the storage root, episode or feed lock directory. Identity changes while a feed
+  lock is held are no longer reported as lock acquisition failures. Refresh opens
+  the episode directory relative to the held root, so a root replaced during
+  admission receives no directories, locks, backups or intents; an episode path
+  outside the admitted root (such as a retargeted `PDCST_HOME`) is refused;
+  relative library roots are compared as absolute paths.
+
+* Refuse unsolicited partial audio responses (including Content-Range on HTTP
+  200) before staging. Preserve existing audio/metadata for a full-response retry.
+* Compare feed Content-Length against its byte ceiling as normalized decimal
+  text, refusing huge values with a bounded FeedError and accepting leading zeros.
+
 * Bound unowned audio destination scans to a shared 10,000-entry/one-second
   active scan budget across admission and publication. Admission may use at
   most half, so folders that cannot also pass the publication recheck are
