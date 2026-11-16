@@ -16,6 +16,7 @@ import warnings
 from collections import Counter
 from contextlib import contextmanager
 from copy import copy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
@@ -42,6 +43,16 @@ from .storage import (
 )
 
 STORE_MAX_BYTES = 16 * 1024**2
+AUDIO_DESTINATION_SCAN_MAX_ENTRIES = 10_000
+AUDIO_DESTINATION_SCAN_MAX_SECONDS = 1.0
+
+
+@dataclass
+class _DestinationScanBudget:
+    entries: int
+    seconds: float
+
+
 # Recoverable well-formedness errors that feedparser's lenient fallback repairs
 # (e.g. a bare ``&`` in a title or an HTML entity such as ``&nbsp;`` without a
 # DOCTYPE). expat reports only its first error, so such a document is accepted
@@ -614,7 +625,7 @@ class EpisodeRepository(JsonRepository):
             raise DownloadConflict("Audio destination must be a regular file")
         return info
 
-    def _download_record(self, locked, guid, audio_url, name):
+    def _download_record(self, locked, guid, audio_url, name, scan_budget=None):
         """Validate identity and exclusive ownership while holding the JSON lock."""
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
         if name.casefold() in reserved or name.casefold().startswith(
@@ -669,13 +680,52 @@ class EpisodeRepository(JsonRepository):
         # Conservative case folding gives the same refusal policy on every host.
         occupied = self._exists(target)
         if not owned and not occupied:
-            with self._directory_entries() as entries:
-                occupied = any(name_key(p.name) == name_key(name) for p in entries)
+            occupied = self._scan_audio_destination(name_key(name), scan_budget)
         if not owned and occupied:
             raise DownloadConflict(
                 "Audio destination contains an unowned existing file"
             )
         return current, target
+
+    def _scan_audio_destination(self, key, budget):
+        if budget is None:
+            budget = _DestinationScanBudget(
+                AUDIO_DESTINATION_SCAN_MAX_ENTRIES, AUDIO_DESTINATION_SCAN_MAX_SECONDS
+            )
+        started = time.monotonic()
+        deadline = started + budget.seconds
+
+        def refuse():
+            raise DownloadConflict(
+                "Audio destination ownership scan incomplete (entry/time limit); "
+                "narrow episode directory and retry"
+            )
+
+        def check_time():
+            if time.monotonic() >= deadline:
+                refuse()
+
+        try:
+            check_time()
+            with self._directory_entries() as entries:
+                while True:
+                    check_time()
+                    if budget.entries <= 0:
+                        refuse()
+                    try:
+                        entry = next(entries)
+                    except StopIteration:
+                        check_time()
+                        return False
+                    budget.entries -= 1
+                    entry_key = unicodedata.normalize("NFC", entry.name).casefold()
+                    check_time()
+                    if entry_key == key:
+                        return True
+        finally:
+            # Share active scan work across admission/publication, excluding the
+            # potentially long transfer and time waiting for either lock.
+            budget.seconds = max(0.0, budget.seconds - (time.monotonic() - started))
 
     def _directory_entries(self):
         # scandir(fd) duplicates the fd; the iterator owns only that duplicate.
@@ -708,13 +758,20 @@ class EpisodeRepository(JsonRepository):
                     "Episode directory identity changed; retry download"
                 ) from None
 
+        scan_budget = _DestinationScanBudget(
+            AUDIO_DESTINATION_SCAN_MAX_ENTRIES, AUDIO_DESTINATION_SCAN_MAX_SECONDS
+        )
         claim = self.path.with_suffix(self.path.suffix + ".download.lock")
         with advisory_lock(claim, directory_fd=self._directory_fd):
             check_directory()
             # Closing the descriptor releases the claim even when transfer fails.
             with self._lock():
                 self._download_record(
-                    self._fetch_all(), episode.guid, episode.audio_url, name
+                    self._fetch_all(),
+                    episode.guid,
+                    episode.audio_url,
+                    name,
+                    scan_budget,
                 )
             check_directory()
             stage = self.base_dir / f".pdcst-download-{uuid4().hex}"
@@ -746,7 +803,7 @@ class EpisodeRepository(JsonRepository):
                 with self._lock():
                     locked = self._fetch_all()
                     current, target = self._download_record(
-                        locked, episode.guid, episode.audio_url, name
+                        locked, episode.guid, episode.audio_url, name, scan_budget
                     )
                     check_directory()
                     target_info = self._audio_destination_info(target)

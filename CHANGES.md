@@ -1,5 +1,9 @@
 # Unreleased
 
+* Bound unowned audio destination scans to a shared 10,000-entry/one-second
+  active scan budget across admission and publication. Refuse incomplete
+  ownership checks explicitly, preserving metadata/audio and releasing locks.
+
 * Anchor downloads (claims, stages, metadata, intents, publication and rollback)
   to no-follow directory descriptors. Refuse replaced directory components
   before commit, preserving old JSON/audio without touching replacement trees.

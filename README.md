@@ -292,6 +292,19 @@ inspect retained stages before retrying; recovery paths refer to the original
 layout. Subscription/refresh pathname containment still assumes other local
 processes do not change directory symlinks while those commands run.
 
+Before transferring into an unowned audio filename, download scans the admitted
+folder for Unicode/case-equivalent names. Admission and publication share a fixed
+budget of 10,000 directory entries and one second of active scan time, including
+iterator acquisition/advancement and name normalization. Transfer time and lock
+waiting do not consume that scan time. An incomplete scan refuses the download
+explicitly; unseen entries are never assumed free. If the budget expires only
+on the publication recheck, completed audio is retained as a recovery stage and
+metadata stays unchanged. Move unrelated directory entries aside or select a
+smaller dedicated podcast directory before retrying. Known owned destinations
+still receive identity/regular-file checks without scanning unrelated entries.
+Directory enumeration is synchronous: a blocked filesystem operation may return
+after the deadline before refusal is reported.
+
 Library transfer callbacks for `EpisodeRepository.download_episode` now receive
 `transfer(url, stage_path, *, directory_fd=...)`. The path is for naming and
 diagnostics; callbacks must use `stage_path.name` with the supplied `dir_fd` for
