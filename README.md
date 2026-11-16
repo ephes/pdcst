@@ -303,7 +303,8 @@ failures are reported with their system reason instead of as identity changes.
 Subscription metadata reads and writes also hold the admitted root directory.
 The CLI resolves the configured storage root (`PDCST_HOME`) first, so a
 symlinked ancestor such as macOS `/tmp` keeps working; errors name the storage
-root, episode or feed lock directory that failed.
+root, episode or feed lock directory that failed. A relative storage root passed
+by a library caller is made absolute when it is admitted.
 Refresh opens the episode directory relative to the held root and holds it as
 well (an episode path that no longer lies under the admitted root, for example
 after `PDCST_HOME` is retargeted during the fetch, is refused): locks, backups,

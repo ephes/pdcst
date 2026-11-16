@@ -14,7 +14,8 @@
   lock is held are no longer reported as lock acquisition failures. Refresh opens
   the episode directory relative to the held root, so a root replaced during
   admission receives no directories, locks, backups or intents; an episode path
-  outside the admitted root (such as a retargeted `PDCST_HOME`) is refused.
+  outside the admitted root (such as a retargeted `PDCST_HOME`) is refused;
+  relative library roots are compared as absolute paths.
 
 * Refuse unsolicited partial audio responses (including Content-Range on HTTP
   200) before staging. Preserve existing audio/metadata for a full-response retry.

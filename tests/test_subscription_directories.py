@@ -254,3 +254,20 @@ def test_root_symlink_retargeted_during_fetch_is_refused(
         p.relative_to(first): p.read_bytes() for p in first.rglob("*.json")
     }
     assert not list(first.rglob(".pdcst-refresh-*"))
+
+
+def test_relative_subscription_repository_admits_episode_directory(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(pdcst.settings, "root", Path("data"))
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [episode]
+
+    pdcst.subscribe(
+        podcast.feed.url, "{index}.mp3", None, Parser(), PodcastRepository("data")
+    )
+    assert (tmp_path / "data" / "podcasts.json").is_file()
+    assert (tmp_path / "data" / podcast.directory / "episodes.json").is_file()

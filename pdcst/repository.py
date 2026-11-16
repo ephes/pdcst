@@ -305,6 +305,8 @@ class JsonRepository:
 
     _directory_fd = None
     _directory_label = "Storage directory"
+    # Absolute path captured when the directory descriptor was admitted.
+    _admitted_path = None
 
     def _check_directory(self):
         """Descriptor-bound operations replace this with their identity checker."""
@@ -322,11 +324,13 @@ class JsonRepository:
             yield self
             return
         relative = None
+        own = Path(os.path.abspath(self.base_dir))
         try:
             if parent is not None and parent._directory_fd is not None:
                 parent._check_directory()
+                base = parent._admitted_path or Path(os.path.abspath(parent.base_dir))
                 try:
-                    relative = self.base_dir.relative_to(parent.base_dir)
+                    relative = own.relative_to(base)
                 except ValueError:
                     relative = None
                 if relative is None or not relative.parts:
@@ -359,6 +363,7 @@ class JsonRepository:
                 admitted = copy(self)
                 admitted._directory_fd = descriptor
                 admitted._check_directory = check
+                admitted._admitted_path = own
                 yield admitted
         except DirectoryAdmissionError as error:
             raise StoreWriteError(f"Unable to update local storage: {error}") from None
