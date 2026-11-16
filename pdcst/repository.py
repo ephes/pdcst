@@ -304,6 +304,28 @@ class JsonRepository:
 
     _directory_fd = None
 
+    def _check_directory(self):
+        """Descriptor-bound operations replace this with their identity checker."""
+
+    @contextmanager
+    def admitted(self, *, create=True):
+        """Use an isolated repository view bound to one held directory."""
+        if self._directory_fd is not None:
+            self._check_directory()
+            yield self
+            return
+        try:
+            with admitted_directory(self.base_dir, create=create) as (
+                descriptor,
+                check,
+            ):
+                admitted = copy(self)
+                admitted._directory_fd = descriptor
+                admitted._check_directory = check
+                yield admitted
+        except DirectoryAdmissionError as error:
+            raise StoreWriteError(f"Unable to update local storage: {error}") from None
+
     def _local(self, path):
         return path.name if self._directory_fd is not None else path
 
@@ -342,6 +364,15 @@ class JsonRepository:
             self._local(target),
             src_dir_fd=self._directory_fd,
             dst_dir_fd=self._directory_fd,
+        )
+
+    def _link(self, source, target):
+        os.link(
+            self._local(source),
+            self._local(target),
+            src_dir_fd=self._directory_fd,
+            dst_dir_fd=self._directory_fd,
+            follow_symlinks=False,
         )
 
     def _sync(self):
@@ -525,6 +556,7 @@ class JsonRepository:
         ):
             self.__dict__["_lock_depth"] = self.__dict__.get("_lock_depth", 0) + 1
             try:
+                self._check_directory()
                 self._check_intents()
                 yield
             finally:
@@ -545,11 +577,14 @@ class JsonRepository:
         The caller syncs the backup directory before publishing its intent.
         """
         try:
-            mode = stat.S_IMODE(self.path.stat().st_mode)
+            mode = stat.S_IMODE(self._stat(self.path).st_mode)
         except FileNotFoundError:
             mode = None
         descriptor = os.open(
-            backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+            self._local(backup),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=self._directory_fd,
         )
         try:
             with os.fdopen(descriptor, "wb", closefd=False) as output:
@@ -563,10 +598,12 @@ class JsonRepository:
 
     def _write_models(self, locked):
         serialized = self._serialize_models(locked)
+        self._check_directory()
         with replacement_file(
             self.path, binary=True, directory_fd=self._directory_fd
         ) as output:
             output.write(serialized)
+            self._check_directory()
 
     def add(self, model):
         """Add a single model to the repository."""
@@ -1080,6 +1117,12 @@ class EpisodeRepository(JsonRepository):
     @contextmanager
     def subscription_import(self, models, podcasts_repo=None, prepare=None):
         """Fence an interrupted pair until an operator settles its generations."""
+        if podcasts_repo is not None and self._directory_fd is None:
+            podcasts_repo._check_directory()
+            with self.admitted() as admitted:
+                with admitted.subscription_import(models, podcasts_repo, prepare):
+                    yield
+            return
         with self._lock():
             locked = self._merge_import(models, self._fetch_all())
             if prepare is not None:
@@ -1089,7 +1132,7 @@ class EpisodeRepository(JsonRepository):
             backup = self.base_dir / f".pdcst-refresh-{token}.previous"
             recovery = self.base_dir / f".pdcst-refresh-{token}.refreshed"
             marker = self.base_dir / REFRESH_INTENT
-            markers = [marker]
+            markers = [(self, marker)]
             podcast_backup = None
             podcast_previous = None
             if podcasts_repo is not None:
@@ -1097,7 +1140,7 @@ class EpisodeRepository(JsonRepository):
                 podcast_backup = (
                     podcasts_repo.base_dir / f".pdcst-refresh-{token}.previous"
                 )
-                markers.append(podcasts_repo.base_dir / REFRESH_INTENT)
+                markers.append((podcasts_repo, podcasts_repo.base_dir / REFRESH_INTENT))
             retain = False
             imported = False
             completed = False
@@ -1117,15 +1160,24 @@ class EpisodeRepository(JsonRepository):
                     "previous_podcasts": (
                         str(podcast_backup) if podcast_previous is not None else None
                     ),
-                    "markers": [str(path) for path in markers],
+                    "markers": [str(path) for _, path in markers],
                 }
                 # Backup directory entries must survive before either marker
                 # can authorize the first metadata replacement.
-                sync_directory(self.base_dir)
+                self._sync()
                 if podcasts_repo is not None:
-                    sync_directory(podcasts_repo.base_dir)
-                for path in markers:
-                    write_intent(path, details)
+                    podcasts_repo._sync()
+                for repo, path in markers:
+                    repo._check_directory()
+                    write_intent(
+                        path,
+                        details,
+                        **(
+                            {"directory_fd": repo._directory_fd}
+                            if repo._directory_fd is not None
+                            else {}
+                        ),
+                    )
                 self._write_models(locked)
                 imported = True
                 yield
@@ -1141,13 +1193,13 @@ class EpisodeRepository(JsonRepository):
                     imported = True
                 if imported:
                     try:
-                        os.link(self.path, recovery)
-                        sync_directory(self.base_dir)
+                        self._link(self.path, recovery)
+                        self._sync()
                         if previous is None:
-                            self.path.unlink()
+                            self._unlink(self.path)
                         else:
-                            os.replace(backup, self.path)
-                        sync_directory(self.base_dir)
+                            self._replace(backup, self.path)
+                        self._sync()
                     except BaseException:
                         retain = True
                         warnings.warn(
@@ -1171,15 +1223,22 @@ class EpisodeRepository(JsonRepository):
                     # synced rollback. Keep backups if marker retirement fails.
                     pending_error = not completed
                     try:
-                        for path in markers:
-                            clear_intent(path)
+                        for repo, path in markers:
+                            clear_intent(
+                                path,
+                                **(
+                                    {"directory_fd": repo._directory_fd}
+                                    if repo._directory_fd is not None
+                                    else {}
+                                ),
+                            )
                     except BaseException as error:
                         if not pending_error:
                             if not isinstance(error, OSError):
                                 raise
                             warnings.warn(
                                 "Refresh completed; recovery cleanup pending at "
-                                + ", ".join(str(path) for path in markers)
+                                + ", ".join(str(path) for _, path in markers)
                                 + "; metadata backups retained; stop all pdcst "
                                 "commands and follow README interrupted-publication "
                                 "recovery; do not repeat refresh",
@@ -1194,10 +1253,10 @@ class EpisodeRepository(JsonRepository):
                             )
                     else:
                         try:
-                            backup.unlink(missing_ok=True)
-                            recovery.unlink(missing_ok=True)
+                            self._unlink(backup)
+                            self._unlink(recovery)
                             if podcast_backup is not None:
-                                podcast_backup.unlink(missing_ok=True)
+                                podcasts_repo._unlink(podcast_backup)
                         except OSError:
                             if pending_error:
                                 message = "Refresh recovery cleanup incomplete"
@@ -1219,6 +1278,25 @@ class PodcastRepository(JsonRepository):
     """
     Store podcasts metadata.
     """
+
+    def _fetch_all(self):
+        if self._directory_fd is not None:
+            return super()._fetch_all()
+        try:
+            try:
+                self.base_dir.lstat()
+            except FileNotFoundError:
+                return {}
+            with self.admitted(create=False) as admitted:
+                return super(PodcastRepository, admitted)._fetch_all()
+        except (StoreWriteError, OSError):
+            raise StoreReadError(
+                self.path, "storage directory unavailable or changed"
+            ) from None
+
+    def add_list(self, models):
+        with self.admitted() as admitted:
+            return super(PodcastRepository, admitted).add_list(models)
 
     @contextmanager
     def feed_lock(self, url):

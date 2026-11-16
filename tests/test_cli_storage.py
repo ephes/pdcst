@@ -159,7 +159,7 @@ def test_cli_store_errors_preserve_private_metadata(
         original_open = repository.os.open
 
         def denied(path, flags, *args, **kwargs):
-            if Path(path) == repo.path:
+            if Path(path).name == repo.path.name:
                 raise PermissionError("SIGNED_SENTINEL")
             return original_open(path, flags, *args, **kwargs)
 

@@ -300,8 +300,12 @@ where the platform supports it (`O_PATH`/`O_SEARCH`); the episode directory itse
 must be readable. A symlinked component (including a library caller passing an
 unresolved path) is refused; the CLI passes resolved paths. Access or creation
 failures are reported with their system reason instead of as identity changes.
-Subscription/refresh pathname containment still assumes other local
-processes do not change directory symlinks while those commands run.
+Subscription metadata reads and writes also hold the admitted root directory.
+Refresh holds the episode directory as well: locks, backups, intents, replacements,
+cleanup and rollback use those descriptors. A changed root/ancestor refuses
+publication without writing into its replacement; rollback stays in the admitted
+(possibly renamed) tree. Restore the original directory layout before retrying.
+Browsing a missing root still creates no directories.
 
 Before transferring into an unowned audio filename, download scans the admitted
 folder for Unicode/case-equivalent names. Admission and publication share a fixed

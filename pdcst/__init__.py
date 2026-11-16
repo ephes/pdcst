@@ -88,9 +88,11 @@ def subscribe(
         fp_repo = FeedParserRepository()
     if podcasts_repo is None:
         podcasts_repo = PodcastRepository(settings.root)
-    podcasts_repo._check_intents()
-    with podcasts_repo.feed_lock(feed_url):
-        return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo)
+    with podcasts_repo.admitted() as admitted:
+        admitted._check_intents()
+        with admitted.feed_lock(feed_url):
+            admitted._check_directory()
+            return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, admitted)
 
 
 def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):

@@ -133,7 +133,7 @@ def _open_component(name, parent, *, search_only_ok):
 
 
 @contextmanager
-def admitted_directory(path):
+def admitted_directory(path, *, create=True):
     """Open each absolute component without following links; retain its identity.
 
     All writes use the final fd. The checker rejects a renamed/replaced root or
@@ -157,6 +157,8 @@ def admitted_directory(path):
                         name, descriptor, search_only_ok=search_only_ok
                     )
                 except FileNotFoundError:
+                    if not create:
+                        raise
                     try:
                         os.mkdir(name, dir_fd=descriptor)
                     except FileExistsError:

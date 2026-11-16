@@ -1,5 +1,10 @@
 # Unreleased
 
+* Bind subscription metadata reads/writes and paired refresh backups, intents,
+  publication, cleanup and rollback to held no-follow directories. Refuse changed
+  root/ancestor identities before publication without touching replacement trees;
+  browsing a missing root still creates nothing.
+
 * Refuse unsolicited partial audio responses (including Content-Range on HTTP
   200) before staging. Preserve existing audio/metadata for a full-response retry.
 * Compare feed Content-Length against its byte ceiling as normalized decimal
