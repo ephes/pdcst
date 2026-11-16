@@ -5,8 +5,8 @@
   explicit control paths before creating locks or fetching the feed.
 
 * Preflight decoded/repaired XML before feedparser entry materialization, bounding
-  depth, elements, entries, links and attributes; reject DOCTYPE declarations
-  before entity expansion and extend elapsed checks through parsing/traversal.
+  depth, elements, entries, links and attributes/namespace declarations; reject
+  DOCTYPE declarations before entity expansion and extend elapsed checks through parsing/traversal.
 
 * Report committed audio/paired-metadata publications with intent-retirement
   failures as successful with recovery cleanup pending; preserve matching data

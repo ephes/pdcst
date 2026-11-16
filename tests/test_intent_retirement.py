@@ -15,10 +15,11 @@ from pdcst.repository import (
 )
 
 
+@pytest.mark.parametrize("active_exception", [False, True])
 @pytest.mark.parametrize("kind", ["audio", "refresh"])
 @pytest.mark.parametrize("failure", ["unlink", "sync"])
 def test_committed_publication_reports_pending_cleanup(
-    publication_store, monkeypatch, kind, failure
+    publication_store, monkeypatch, kind, failure, active_exception
 ):
     home, episodes = publication_store
     monkeypatch.setattr(pdcst.settings, "root", home)
@@ -51,9 +52,7 @@ def test_committed_publication_reports_pending_cleanup(
         def get(self, *_):
             return show, incoming
 
-    with pytest.warns(
-        RuntimeWarning, match="completed.*recovery cleanup pending"
-    ) as warnings:
+    def publish():
         if kind == "audio":
 
             def transfer(_url, stage):
@@ -64,6 +63,17 @@ def test_committed_publication_reports_pending_cleanup(
         else:
             result = pdcst.subscribe(show.feed.url, "saved.mp3", None, Parser(), shows)
             assert result.episodes_count == 1
+
+    with pytest.warns(
+        RuntimeWarning, match="completed.*recovery cleanup pending"
+    ) as warnings:
+        if active_exception:
+            try:
+                raise RuntimeError("earlier handled caller error")
+            except RuntimeError:
+                publish()
+        else:
+            publish()
     message = str(warnings[0].message)
     assert "PRIVATE_ERROR" not in message
     assert str(episodes.base_dir / marker_name) in message

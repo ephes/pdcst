@@ -21,6 +21,7 @@ from tests.test_feed_transport import BODY
         "entries",
         "links",
         "attributes",
+        "namespaces",
         "doctype",
         "external-doctype",
         "repaired-depth",
@@ -47,6 +48,7 @@ def test_xml_work_refused_before_materialization(
         "entries": "<item/>" * 3,
         "links": "<link/>" * 3,
         "attributes": '<x a="1" b="2" c="3" d="4" e="5"/>',
+        "namespaces": '<x xmlns:a="a" xmlns:b="b" xmlns:c="c" xmlns:d="d" xmlns:e="e"/>',
     }.get(case, "")
     body = BODY.replace(b"</channel>", payload.encode() + b"</channel>")
     if case == "doctype":
@@ -82,11 +84,12 @@ def test_preflight_exact_limits_and_namespaced_atom(monkeypatch, encoding):
     monkeypatch.setattr(FeedParserRepository, "MAX_XML_NODES", 4)
     monkeypatch.setattr(FeedParserRepository, "MAX_XML_ENTRIES", 1)
     monkeypatch.setattr(FeedParserRepository, "MAX_XML_LINKS", 1)
-    monkeypatch.setattr(FeedParserRepository, "MAX_XML_ATTRIBUTES", 1)
+    monkeypatch.setattr(FeedParserRepository, "MAX_XML_ATTRIBUTES", 2)
     text = (
         '<?xml version="1.0" encoding="'
         + encoding
-        + '"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><link href="audio.mp3"/><title>News & Views</title></entry></feed>'
+        + '"?><feed xmlns="http://www.w3.org/2005/Atom">'
+        '<entry><link href="audio.mp3"/><title>News & Views</title></entry></feed>'
     )
     FeedParserRepository.preflight_xml(text.encode(encoding), {}, lambda: None)
     with pytest.raises(FeedError, match="XML work limit"):

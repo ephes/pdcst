@@ -10,7 +10,6 @@ import json
 import os
 import re
 import stat
-import sys
 import time
 import unicodedata
 import warnings
@@ -883,6 +882,7 @@ class EpisodeRepository(JsonRepository):
                 markers.append(podcasts_repo.base_dir / REFRESH_INTENT)
             retain = False
             imported = False
+            completed = False
             try:
                 if previous is not None:
                     self._write_refresh_backup(backup, previous)
@@ -911,6 +911,7 @@ class EpisodeRepository(JsonRepository):
                 self._write_models(locked)
                 imported = True
                 yield
+                completed = True
             except BaseException as error:
                 episodes_unsynced = isinstance(error, PublicationDurabilityError)
                 if episodes_unsynced:
@@ -950,7 +951,7 @@ class EpisodeRepository(JsonRepository):
                 if not retain:
                     # Retire markers only after successful publication or a
                     # synced rollback. Keep backups if marker retirement fails.
-                    pending_error = sys.exc_info()[0] is not None
+                    pending_error = not completed
                     try:
                         for path in markers:
                             clear_intent(path)
@@ -1091,16 +1092,24 @@ class FeedParserRepository:
             nonlocal depth
             depth -= 1
 
+        def namespace(_prefix, _uri):
+            nonlocal attributes
+            attributes += 1
+            if attributes > cls.MAX_XML_ATTRIBUTES:
+                raise FeedError("Feed XML work limit exceeded")
+
         def doctype(*_args):
             raise FeedError("Feed XML DOCTYPE is unsupported")
 
         parser.StartElementHandler = start
         parser.EndElementHandler = end
+        parser.StartNamespaceDeclHandler = namespace
         parser.StartDoctypeDeclHandler = doctype
         try:
             for offset in range(0, len(normalized), 64 * 1024):
                 remaining()
-                parser.Parse(normalized[offset : offset + 64 * 1024], False)
+                stop = offset + 64 * 1024
+                parser.Parse(normalized[offset:stop], False)
             parser.Parse(b"", True)
         except (expat.ExpatError, ValueError, UnicodeError) as error:
             if isinstance(error, FeedError):

@@ -21,9 +21,9 @@ def test_rolling_feed_keeps_indexes_counts_and_downloads(
         result.published += timedelta(days=day)
         return result
 
-    a, b, c, older = [
+    a, b, c, older = (
         row(guid, day) for guid, day in [("a", 0), ("b", 1), ("c", 2), ("older", -10)]
-    ]
+    )
 
     def refresh(rows):
         # Feed indexes describe only the latest chronological window.

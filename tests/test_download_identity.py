@@ -171,7 +171,8 @@ def test_feed_refresh_during_download(
     assert refreshed == [True]
     saved = EpisodeRepository(repo.base_dir).all[episode.guid]
     assert saved.title == fresh.title
-    assert saved.index == fresh.index
+    # Feed refreshes preserve the retained GUID index despite feed-local renumbering.
+    assert saved.index == episode.index
     assert saved.published == fresh.published
     assert saved.audio_url == fresh.audio_url
     assert saved.audio_file == (None if changed_enclosure else target.name)
