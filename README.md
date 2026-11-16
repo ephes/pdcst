@@ -127,6 +127,15 @@ Library exceptions retain no underlying transport cause/context, so their messag
 and formatted tracebacks omit private URL credentials, queries and fragments.
 Failed HTTP response bodies are not read for diagnostics.
 
+Before feedparser materializes entries, a streaming XML preflight admits at most
+64 levels of nesting, 100,000 elements, 10,000 RSS items/Atom entries, 50,000
+link/enclosure elements and 200,000 attributes in total. Charset decoding and
+entity repair each have a 16 MiB UTF-8 ceiling. DOCTYPE declarations (including
+external DTDs) are refused before expansion or external access. The acquisition
+deadline is also checked during preflight, after parsing and during enclosure
+traversal; parser calls are synchronous, bounded by these input/work limits.
+These fixed limits refuse the refresh before either metadata store changes.
+
 Malformed or incomplete XML is refused before using partial parser entries,
 including truncated items, mismatched tags and malformed trailing XML. Parser
 failures also refuse unknown encodings and undeclared namespaces. Complete feeds

@@ -1,5 +1,9 @@
 # Unreleased
 
+* Preflight decoded/repaired XML before feedparser entry materialization, bounding
+  depth, elements, entries, links and attributes; reject DOCTYPE declarations
+  before entity expansion and extend elapsed checks through parsing/traversal.
+
 * Report committed audio/paired-metadata publications with intent-retirement
   failures as successful with recovery cleanup pending; preserve matching data
   and remaining backups, name recovery actions, and avoid repeat transfers.
