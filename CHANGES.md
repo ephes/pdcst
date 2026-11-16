@@ -1,5 +1,9 @@
 # Unreleased
 
+* Reserve subscription directory components for metadata, intents, recovery files
+  and feed/download locks, including case variants and resolved aliases; reject
+  explicit control paths before creating locks or fetching the feed.
+
 * Preflight decoded/repaired XML before feedparser entry materialization, bounding
   depth, elements, entries, links and attributes; reject DOCTYPE declarations
   before entity expansion and extend elapsed checks through parsing/traversal.

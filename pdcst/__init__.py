@@ -12,6 +12,8 @@ from .config import settings
 from .download import DownloadError, download_with_progress
 from .models import Episode, FilenamePatternError, Podcast
 from .repository import (
+    AUDIO_INTENT,
+    REFRESH_INTENT,
     DownloadConflict,
     DuplicateIdentity,
     EpisodeRepository,
@@ -47,6 +49,29 @@ def contained_path(root, *parts):
     return destination
 
 
+def subscription_directory(directory):
+    """Contain paths and reserve every component aliasing control storage."""
+    destination = contained_path(settings.root, directory)
+    root = Path(settings.root).resolve()
+    reserved = {
+        "podcasts.json",
+        "podcasts.json.lock",
+        "episodes.json",
+        "episodes.json.lock",
+        "episodes.json.download.lock",
+        ".feed-locks",
+        REFRESH_INTENT,
+        AUDIO_INTENT,
+    }
+    for part in (*Path(directory).parts, *destination.relative_to(root).parts):
+        key = unicodedata.normalize("NFC", part).casefold()
+        if key in reserved or key.startswith((".pdcst-refresh-", ".pdcst-download-")):
+            raise ValueError(
+                "Podcast directory component is reserved for repository storage"
+            )
+    return destination
+
+
 def subscribe(
     feed_url: str,
     name_pattern: str,
@@ -57,6 +82,8 @@ def subscribe(
     """
     Subscribe to a podcast feed url.
     """
+    if podcast_dir is not None:
+        subscription_directory(podcast_dir)
     if fp_repo is None:
         fp_repo = FeedParserRepository()
     if podcasts_repo is None:
@@ -116,7 +143,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
             while owned(podcast.directory):
                 podcast.directory = f"{base}_{suffix}"
                 suffix += 1
-        episode_dir = contained_path(settings.root, podcast.directory)
+        episode_dir = subscription_directory(podcast.directory)
         locked = podcasts_repo._fetch_all()
 
         def prepare(episodes_by_guid):

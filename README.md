@@ -251,8 +251,14 @@ relying on host permission behavior.
 are converted to single safe components for new subscriptions. Existing stored
 directory names and contained legacy directories remain stable. `--podcast-dir` may specify a relative
 subdirectory within that root; absolute paths, parent traversal, Windows paths,
-and symlinks resolving outside the root are rejected before writing. Filename
-patterns must produce a single relative filename. Supported placeholders are
+and symlinks resolving outside the root are rejected before writing. Directory components may not use `podcasts.json`, `episodes.json`, their metadata
+or download lock names, `.feed-locks`, or any `.pdcst-refresh-`/`.pdcst-download-`
+name (including intent and recovery names). The check ignores case, normalizes
+Unicode and includes resolved in-root aliases; it applies at every nesting level.
+Explicit reserved directories are refused before creating locks/directories or
+fetching the feed. Ordinary custom/hidden directories such as `.shows` remain
+supported. Legacy stored reserved directories must be corrected before refresh.
+Filename patterns must produce a single relative filename. Supported placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
