@@ -247,7 +247,12 @@ patterns must produce a single relative filename. Supported placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
-before metadata publication or audio transfer. Both `add` and `download` report
+before metadata publication or audio transfer. Subscription preflight checks the
+entire retained inventory, including episodes absent from the current feed, after
+assigning stable indices. Generated filenames must be distinct under NFC Unicode
+normalization and case folding on every host. A collision refuses both metadata
+updates; use a pattern including `{index}`. Existing downloaded filenames remain
+associated without renaming. Both `add` and `download` report
 pattern failures as concise CLI errors. Formatting accepts the standard spec
 syntax with bounded numbers (every width/precision 0–255): an optional fill and
 alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,

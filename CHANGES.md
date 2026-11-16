@@ -1,5 +1,8 @@
 # Unreleased
 
+* Preflight generated filenames across incoming and retained episodes, refusing
+  Unicode/case-equivalent collisions before publishing either metadata store.
+
 * Keep GUID indices stable across rolling/reordered feeds, allocate new indices
   after the retained maximum, and count the full retained episode inventory.
 

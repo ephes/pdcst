@@ -117,13 +117,20 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                 podcast.directory = f"{base}_{suffix}"
                 suffix += 1
         episode_dir = contained_path(settings.root, podcast.directory)
-        for episode in episodes:
-            contained_path(
-                settings.root, podcast.directory, podcast.get_audio_file_name(episode)
-            )
         locked = podcasts_repo._fetch_all()
 
         def prepare(episodes_by_guid):
+            names = set()
+            for episode in episodes_by_guid.values():
+                name = podcast.get_audio_file_name(episode)
+                contained_path(settings.root, podcast.directory, name)
+                key = unicodedata.normalize("NFC", name).casefold()
+                if key in names:
+                    raise FilenamePatternError(
+                        "Episode filename collision; choose a distinct filename "
+                        "pattern including {index}"
+                    )
+                names.add(key)
             podcast.episodes_count = len(episodes_by_guid)
             stored = podcasts_repo.storage_model_type(**podcast.dict())
             locked[stored.pk] = stored
