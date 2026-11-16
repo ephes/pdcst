@@ -5,6 +5,7 @@ Atm only uses json. But this could also be a sqlite or a
 remote api, maybe fastAPI... hmm.
 """
 
+import errno
 import fcntl
 import json
 import os
@@ -314,8 +315,12 @@ class JsonRepository:
     def _exists(self, path):
         try:
             self._stat(path)
-        except FileNotFoundError:
-            return False
+        except OSError as error:
+            # Like pathlib: an unusable parent is absence here; the store read
+            # then reports a bounded StoreReadError instead of a raw OSError.
+            if error.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+                return False
+            raise
         return True
 
     def _unlink(self, path):

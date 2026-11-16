@@ -157,7 +157,10 @@ def admitted_directory(path):
                         name, descriptor, search_only_ok=search_only_ok
                     )
                 except FileNotFoundError:
-                    os.mkdir(name, dir_fd=descriptor)
+                    try:
+                        os.mkdir(name, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass  # Created concurrently; reopen it without following.
                     child = _open_component(
                         name, descriptor, search_only_ok=search_only_ok
                     )

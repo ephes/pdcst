@@ -188,3 +188,29 @@ def test_symlinked_library_path_is_refused_without_writes(publication_store, epi
     assert repo.path.read_bytes() == before
     assert (repo.base_dir / "saved.mp3").read_bytes() == b"previous audio"
     assert not list(repo.base_dir.glob(".pdcst-download-*"))
+
+
+def test_concurrently_created_component_is_reopened(tmp_path, monkeypatch):
+    from pdcst import storage
+
+    mkdir = os.mkdir
+
+    def racing_mkdir(name, *args, **kwargs):
+        # Another process creates the same missing component first.
+        mkdir(name, *args, **kwargs)
+        raise FileExistsError(17, os.strerror(17))
+
+    monkeypatch.setattr(storage.os, "mkdir", racing_mkdir)
+    target = tmp_path / "new" / "episodes"
+    with storage.admitted_directory(target) as (descriptor, check):
+        check()
+        assert os.fstat(descriptor).st_ino == os.stat(target).st_ino
+
+
+def test_unusable_parent_reports_bounded_store_error(tmp_path):
+    from pdcst.repository import StoreReadError
+
+    plain = tmp_path / "plain"
+    plain.write_bytes(b"not a directory")
+    with pytest.raises(StoreReadError):
+        repository.EpisodeRepository(plain / "episodes").all
