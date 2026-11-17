@@ -24,10 +24,29 @@ from .repository import (
 )
 from .storage import PublicationDurabilityError
 
-__all__ = ["subscribe", "list_all_podcasts", "list_all_episodes"]
+__all__ = ["subscribe", "list_all_podcasts", "list_all_episodes", "terminal_text"]
 
 __version__ = "0.12"
 cli = typer.Typer()
+
+# Feed text may carry CR/LF, C1 controls (RI, DCS, OSC, ...) and bidirectional
+# overrides that rewrite, hide or reorder terminal output.
+_TERMINAL_UNSAFE_FORMATS = frozenset(
+    "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+)
+
+
+def terminal_text(value) -> str:
+    """Escape control, line-separator and bidi-override characters for display."""
+    return "".join(
+        (
+            f"\\u{ord(char):04x}"
+            if unicodedata.category(char) in {"Cc", "Zl", "Zp"}
+            or char in _TERMINAL_UNSAFE_FORMATS
+            else char
+        )
+        for char in str(value)
+    )
 
 
 def contained_path(root, *parts):
@@ -246,7 +265,7 @@ def add(
             "Unable to update local storage: filesystem error; "
             "check PDCST_HOME and write permissions"
         ) from None
-    print(f"Podcast {podcast.title} added")
+    print(f"Podcast {terminal_text(podcast.title)} added")
 
 
 @cli.command(name="podcasts")
@@ -259,7 +278,7 @@ def list_podcasts():
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:
-        print(podcast)
+        print(terminal_text(podcast))
 
 
 @cli.command(name="episodes")
@@ -277,7 +296,7 @@ def list_episodes(identifier: str):
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for episode in episodes:
-        print(episode)
+        print(terminal_text(episode))
 
 
 @cli.command()

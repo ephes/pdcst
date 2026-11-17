@@ -1,5 +1,11 @@
 # Unreleased
 
+* Escape control characters (CR/LF/TAB, C1 controls such as RI, DCS and OSC),
+  line/paragraph separators and bidi overrides in feed titles printed by `add`,
+  `podcasts` and `episodes` as visible `\uXXXX` text, so a feed cannot rewrite or
+  hide terminal output. Stored titles and title matching are unchanged; library
+  callers can use the new `pdcst.terminal_text()`.
+
 * Admit final audio response Content-Type before staging. Refuse HTML/XML/JSON
   error documents and other unsupported declarations, preserving audio/metadata.
   Retain missing/blank and generic binary types for CDN compatibility; accept the

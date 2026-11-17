@@ -168,6 +168,14 @@ Every browse reloads current JSON without writing it, including repeated API cal
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 
+Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes`
+print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
+line/paragraph separators and bidirectional override/isolate marks as visible
+`\uXXXX` escapes, so a feed cannot rewrite, hide or reorder terminal output or add
+lines to a listing. Stored titles keep their original text, and title matching for
+`episodes` and `download` uses that original text. Library callers that print
+`Podcast`/`Episode` objects themselves can use `pdcst.terminal_text()`.
+
 ## Download
 
 Download an episode which has "rest" in the title from the python podcast:
