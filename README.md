@@ -340,12 +340,16 @@ this keyword and follows the contract. Standalone calls without it retain their
 pathname interface.
 
 Downloads require an HTTP success response and follow at most five redirects.
+Redirect responses are closed without reading their bodies. Relative locations,
+cookies and authorization headers follow HTTPX's redirect rules. All hops and
+the final body share one elapsed deadline; only the final body is retained and
+counted against the audio byte limit.
 Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
 elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
 must be finite. Larger episodes can use higher limits. Declared lengths over the
 byte limit are rejected before creating output; each raw chunk is checked before
 writing, and elapsed time is checked again before publication. HTTP operations
-time out after at most 10 seconds (or the configured duration if smaller), so a
+time out after at most 10 seconds (or the remaining elapsed budget if smaller), so a
 blocked operation may finish its timeout before the elapsed limit is checked.
 The transfer helper `download_with_progress` raises `DownloadError` (a `ValueError`)
 for HTTP, transport and budget failures. Import these with

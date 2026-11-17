@@ -160,20 +160,19 @@ def test_declared_length_numeric_domain(tmp_path, monkeypatch, length, expected)
     monkeypatch.setattr(
         module, "settings", SimpleNamespace(audio_max_bytes=8, audio_max_seconds=5)
     )
-    # A minimal fake admits non-ASCII header values that httpx itself refuses.
-    from contextlib import nullcontext
-
-    response = SimpleNamespace(
-        status_code=200,
-        headers={"Content-Length": length},
-        raise_for_status=lambda: None,
-        iter_raw=lambda: iter([b"data"]),
-    )
+    client = httpx.Client
     monkeypatch.setattr(
         httpx,
         "Client",
-        lambda **kw: nullcontext(
-            SimpleNamespace(stream=lambda *a, **kw: nullcontext(response))
+        lambda **kw: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers=httpx.Headers({"Content-Length": length}, encoding="utf-8"),
+                    stream=httpx.ByteStream(b"data"),
+                )
+            ),
+            **kw,
         ),
     )
     totals = []

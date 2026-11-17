@@ -1,5 +1,9 @@
 # Unreleased
 
+* Follow audio redirects as streamed requests, closing discarded bodies unread.
+  Keep the five-hop ceiling and one elapsed deadline across the chain, and bound
+  each request timeout by the remaining time. Preserve HTTPX URL/header rules.
+
 * Admit `.feed-locks` relative to the held subscription root without following
   symlinks, acquire hashed locks through that descriptor, and recheck directory
   identities after waiting and before publication. Refuse aliases/replacements
