@@ -1,5 +1,10 @@
 # Unreleased
 
+* Admit final audio response Content-Type before staging. Refuse HTML/XML/JSON
+  error documents and other unsupported declarations, preserving audio/metadata.
+  Retain missing/blank and generic binary types for CDN compatibility; accept the
+  supported audio types and MP4/Ogg containers, ignoring case and parameters.
+
 * Follow audio redirects as streamed requests, closing discarded bodies unread.
   Keep the five-hop ceiling and one elapsed deadline across the chain, and bound
   each request timeout by the remaining time. Preserve HTTPX URL/header rules.

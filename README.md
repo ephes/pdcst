@@ -181,6 +181,16 @@ Audio fetches require HTTP 200 without Content-Range. Unsolicited partial
 responses are refused before staging; previous audio and metadata survive and a
 full-response retry is supported.
 
+The final response's `Content-Type` is checked before staging. Supported types
+are the `audio/` types listed under Subscribe above, plus `application/ogg` and
+`application/mp4` containers. Missing/blank types, `application/octet-stream` and
+`binary/octet-stream` remain accepted for CDN compatibility. Type matching ignores
+case and parameters. All other declarations, including HTML, XML and JSON error
+documents (also `+xml`/`+json` variants), are refused without replacing saved audio
+or metadata. A mislabeled CDN must use one of the supported types; a filename
+extension does not override its response declaration. This checks the declared
+type, without decoding or sniffing the media bytes.
+
 Downloads require a unique match for both titles; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact
