@@ -26,7 +26,7 @@ from .storage import PublicationDurabilityError
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes", "terminal_text"]
 
-__version__ = "0.12"
+__version__ = "0.13"
 cli = typer.Typer()
 
 # Feed text may carry CR/LF, C1 controls (RI, DCS, OSC, ...) and bidirectional

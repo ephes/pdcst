@@ -1,5 +1,17 @@
 # Unreleased
 
+# 2026-11-17 v0.13
+
+Compatibility notes: `v0.12` was tagged but never published to PyPI, so this
+release follows `0.11` there. Incompatible changes: Python 3.10 or newer is
+required (3.9 is no longer supported); transfer callbacks must use
+the new borrowed `directory_fd` keyword for stage access; `pdcst.download`
+raises `typer.BadParameter` for download failures that were `ValueError`;
+filename patterns with numbers above 255, the `c` integer type or string widths
+starting with `0` are refused (edit them in `podcasts.json` or re-add the
+podcast); Pydantic is bounded to 1.x; feeds without usable audio episodes and
+malformed feed XML are refused.
+
 * Escape control characters (CR/LF/TAB, C1 controls such as RI, DCS and OSC),
   line/paragraph separators and bidi overrides in feed titles printed by `add`,
   `podcasts` and `episodes` as visible `\uXXXX` text, so a feed cannot rewrite or
