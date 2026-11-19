@@ -1378,26 +1378,96 @@ class PodcastRepository(JsonRepository):
             locked._check_directory = check
             yield locked
 
-    def list(self, additional_attributes=None):
+    def _listed_podcast(self, stored, additional_attributes=None):
         from . import contained_path
 
-        stored_models = list(self.all.values())
-        podcasts = [
-            self.domain_model_type.from_dict(
-                model.dict() | (additional_attributes or {})
-            )
-            for model in stored_models
+        podcast = self.domain_model_type.from_dict(
+            stored.dict() | (additional_attributes or {})
+        )
+        if stored.directory is None:
+            podcast._legacy_directory = True
+            legacy = stored.title.lower().replace(" ", "_")
+            try:
+                path = contained_path(self.base_dir, legacy)
+            except ValueError:
+                return podcast
+            if path.is_dir():
+                podcast.directory = legacy
+        return podcast
+
+    def list(self, additional_attributes=None):
+        return [
+            self._listed_podcast(stored, additional_attributes)
+            for stored in self.all.values()
         ]
-        for podcast, stored in zip(podcasts, stored_models):
-            if stored.directory is None:
-                legacy = stored.title.lower().replace(" ", "_")
-                try:
-                    path = contained_path(self.base_dir, legacy)
-                except ValueError:
+
+    @contextmanager
+    def download_subscription(self, podcast):
+        """Pin the directory of a legacy subscription after a completed download.
+
+        The directory is validated like a subscription directory, and refused
+        when another feed already uses it, before any download starts.
+        """
+        from . import contained_path, subscription_directory
+
+        if not podcast._legacy_directory:
+            yield podcast, None
+            return
+
+        with self.admitted(create=False) as admitted, admitted._lock():
+            rows = admitted._fetch_all()
+            stored = rows.get(podcast.feed.url)
+            if stored is None:
+                raise DownloadConflict("Podcast subscription changed; retry download")
+            current = admitted._listed_podcast(stored)
+            root = admitted.base_dir.resolve()
+            resolved = contained_path(root, current.directory)
+            admitted._check_directory()
+            if stored.directory is not None:
+                yield current, resolved
+                return
+
+            try:
+                subscription_directory(current.directory, root=root)
+            except ValueError as error:
+                raise DownloadConflict(
+                    f"{error}; set a distinct directory in podcasts.json"
+                ) from None
+
+            def directory_key(directory):
+                return unicodedata.normalize(
+                    "NFC", str(contained_path(root, directory))
+                ).casefold()
+
+            target = directory_key(current.directory)
+            for url, other in rows.items():
+                if url == podcast.feed.url:
                     continue
-                if path.is_dir():
-                    podcast.directory = legacy
-        return podcasts
+                try:
+                    other_key = directory_key(admitted._listed_podcast(other).directory)
+                except ValueError:
+                    # Unsafe legacy paths cannot own a contained destination.
+                    continue
+                if other_key == target:
+                    raise DownloadConflict(
+                        "Podcast directory is already used by another feed; "
+                        "set a distinct directory in podcasts.json"
+                    )
+
+            current.directory = str(resolved.relative_to(root))
+            stored.directory = current.directory
+            admitted._serialize_models(rows)
+            yield current, resolved
+            try:
+                admitted._write_models(rows)
+            except PublicationDurabilityError:
+                raise
+            except (OSError, StoreWriteError, DirectoryAdmissionError):
+                raise StoreWriteError(
+                    f"Audio saved in {resolved}, but the subscription directory "
+                    "could not be saved. Check local storage and set the directory "
+                    "in podcasts.json before retrying."
+                ) from None
 
     name = "podcasts.json"
     storage_model_type = PodcastInDb

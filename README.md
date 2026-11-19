@@ -167,6 +167,8 @@ metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
+For a legacy subscription without a saved directory, browsing prefers the
+contained legacy directory if it exists and otherwise uses the sanitized name.
 
 Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes`
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
@@ -206,6 +208,13 @@ title or a more specific substring; duplicate exact titles must first be correct
 in the metadata. Browsing retains its first-substring-match behavior.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
+The first successful download for a legacy subscription saves the selected
+directory in `podcasts.json`. It holds the subscription lock from directory
+selection through publication. A selected directory that is reserved for
+repository storage or already used by another feed is refused before any
+transfer starts; set a distinct directory in `podcasts.json` instead. Later
+commands use the saved directory even if the other directory appears. If audio is saved but updating the subscription
+fails, use the reported directory to repair `podcasts.json` before retrying.
 
 # Contribute
 
@@ -389,8 +398,10 @@ metadata, including zero-length and empty chunked responses. A directory-sync
 failure while staging the transfer is reported as an ordinary download failure
 (`DownloadError`); the stage is removed and nothing is published. This is a transfer
 completeness check, not an audio codec validation. Responses with a content
-encoding other than identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
-the process umask. Files are flushed into a sibling temporary file
+encoding other than identity are rejected. Replacements preserve the permissions
+of existing regular files and refuse symlinks and other nonregular destinations
+before publication. New files use 0666 filtered by the process umask.
+Files are flushed into a sibling temporary file
 and atomically replaced after completion. While empty, the sibling's
 umask-filtered creation mode is captured; before its first payload write it is
 restricted to 0600. After writing and flushing, the destination's existing mode

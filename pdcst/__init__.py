@@ -22,7 +22,7 @@ from .repository import (
     StoreReadError,
     StoreWriteError,
 )
-from .storage import PublicationDurabilityError
+from .storage import InvalidReplacementTarget, PublicationDurabilityError
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes", "terminal_text"]
 
@@ -68,10 +68,10 @@ def contained_path(root, *parts):
     return destination
 
 
-def subscription_directory(directory):
+def subscription_directory(directory, root=None):
     """Contain paths and reserve every component aliasing control storage."""
-    destination = contained_path(settings.root, directory)
-    root = Path(settings.root).resolve()
+    root = Path(settings.root if root is None else root).resolve()
+    destination = contained_path(root, directory)
     reserved = {
         "podcasts.json",
         "podcasts.json.lock",
@@ -258,7 +258,7 @@ def add(
         podcast = subscribe(feed_url, name_pattern, podcast_dir)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from None
-    except PublicationDurabilityError as error:
+    except (InvalidReplacementTarget, PublicationDurabilityError) as error:
         raise typer.BadParameter(str(error)) from None
     except OSError:
         raise typer.BadParameter(
@@ -310,18 +310,28 @@ def download(podcast: str, episode: str):
         podcast = find_podcast_by_identifier(podcast, unique=True)
         if podcast is None:
             raise typer.BadParameter("No matching podcast")
-        episode = find_episode_by_identifier(podcast, episode, unique=True)
-        if episode is None:
-            raise typer.BadParameter("No matching episode")
-        EpisodeRepository(
-            contained_path(settings.root, podcast.directory)
-        ).download_episode(
-            episode, podcast.get_audio_file_name(episode), download_with_progress
-        )
+        subscriptions = PodcastRepository(Path(settings.root).resolve())
+        with subscriptions.download_subscription(podcast) as (podcast, directory):
+            if directory is None:
+                episode = find_episode_by_identifier(podcast, episode, unique=True)
+            else:
+                episodes = EpisodeRepository(directory).list(
+                    additional_attributes={"podcast": podcast}
+                )
+                episode = _find_title(episodes, episode, "episode", unique=True)
+            if episode is None:
+                raise typer.BadParameter("No matching episode")
+            directory = directory or contained_path(
+                subscriptions.base_dir, podcast.directory
+            )
+            EpisodeRepository(directory).download_episode(
+                episode, podcast.get_audio_file_name(episode), download_with_progress
+            )
     except (
         DownloadConflict,
         DuplicateIdentity,
         DownloadError,
+        InvalidReplacementTarget,
         PublicationDurabilityError,
         FilenamePatternError,
         StoreReadError,
