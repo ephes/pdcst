@@ -44,6 +44,32 @@ def test_payload_stays_private_until_publication(
     assert not list(tmp_path.glob(".*.tmp"))
 
 
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("kind", ["symlink", "fifo"])
+def test_replacement_refuses_nonregular_destination(tmp_path, relative, kind):
+    target = tmp_path / "saved"
+    original = tmp_path / "original"
+    original.write_bytes(b"previous audio")
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if relative else None
+    try:
+        with pytest.raises(OSError, match="Replacement target must be a regular file"):
+            with storage.replacement_file(
+                target, binary=True, directory_fd=directory_fd
+            ) as output:
+                output.write(b"new audio")
+                if kind == "symlink":
+                    target.symlink_to(original.name)
+                else:
+                    os.mkfifo(target)
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+    is_expected_type = stat.S_ISLNK if kind == "symlink" else stat.S_ISFIFO
+    assert is_expected_type(target.lstat().st_mode)
+    assert original.read_bytes() == b"previous audio"
+    assert set(tmp_path.iterdir()) == {target, original}
+
+
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("existing", [False, True])
 def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existing):
@@ -57,7 +83,7 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
     synced = []
     opened = []
     original_open = storage.os.open
-    original_stat = Path.stat
+    original_lstat = Path.lstat
     original_replace = storage.os.replace
 
     def open_file(path, flags, mode=0o777):
@@ -67,10 +93,10 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
             opened.append(descriptor)
         return descriptor
 
-    def target_stat(path, *args, **kwargs):
+    def target_lstat(path):
         if path == target and existing:
             return SimpleNamespace(st_mode=stat.S_IFREG | 0o640)
-        return original_stat(path, *args, **kwargs)
+        return original_lstat(path)
 
     def replace(source, destination):
         assert synced == opened
@@ -81,7 +107,7 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
         original_replace(source, destination)
 
     monkeypatch.setattr(storage.os, "open", open_file)
-    monkeypatch.setattr(Path, "stat", target_stat)
+    monkeypatch.setattr(Path, "lstat", target_lstat)
     monkeypatch.setattr(
         storage.os, "fchmod", lambda fd, mode: preserved_modes.append(mode)
     )

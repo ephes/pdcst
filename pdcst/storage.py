@@ -7,6 +7,10 @@ import uuid
 from contextlib import contextmanager
 
 
+class InvalidReplacementTarget(OSError):
+    """The destination exists and is not a regular file."""
+
+
 class PublicationDurabilityError(OSError):
     """Replacement is visible, but its directory entry could not be synced."""
 
@@ -60,15 +64,21 @@ def replacement_file(target, *, binary=False, directory_fd=None):
                 yield output
                 output.flush()
                 try:
-                    mode = stat.S_IMODE(
-                        target.stat().st_mode
+                    info = (
+                        target.lstat()
                         if directory_fd is None
                         else os.stat(
                             target.name, dir_fd=directory_fd, follow_symlinks=False
-                        ).st_mode
+                        )
                     )
                 except FileNotFoundError:
                     mode = creation_mode
+                else:
+                    if not stat.S_ISREG(info.st_mode):
+                        raise InvalidReplacementTarget(
+                            "Replacement target must be a regular file"
+                        )
+                    mode = stat.S_IMODE(info.st_mode)
                 os.fchmod(output.fileno(), mode)
                 os.fsync(output.fileno())
         finally:

@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse nonregular replacement destinations, including symlinks, and preserve
+  existing regular-file permissions.
+
 # 2026-11-17 v0.13
 
 Compatibility notes: `v0.12` was tagged but never published to PyPI, so this

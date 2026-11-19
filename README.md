@@ -389,8 +389,10 @@ metadata, including zero-length and empty chunked responses. A directory-sync
 failure while staging the transfer is reported as an ordinary download failure
 (`DownloadError`); the stage is removed and nothing is published. This is a transfer
 completeness check, not an audio codec validation. Responses with a content
-encoding other than identity are rejected. Replacements preserve existing file permissions; new files use 0666 filtered by
-the process umask. Files are flushed into a sibling temporary file
+encoding other than identity are rejected. Replacements preserve the permissions
+of existing regular files and refuse symlinks and other nonregular destinations
+before publication. New files use 0666 filtered by the process umask.
+Files are flushed into a sibling temporary file
 and atomically replaced after completion. While empty, the sibling's
 umask-filtered creation mode is captured; before its first payload write it is
 restricted to 0600. After writing and flushing, the destination's existing mode

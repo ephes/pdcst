@@ -22,7 +22,7 @@ from .repository import (
     StoreReadError,
     StoreWriteError,
 )
-from .storage import PublicationDurabilityError
+from .storage import InvalidReplacementTarget, PublicationDurabilityError
 
 __all__ = ["subscribe", "list_all_podcasts", "list_all_episodes", "terminal_text"]
 
@@ -258,7 +258,7 @@ def add(
         podcast = subscribe(feed_url, name_pattern, podcast_dir)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from None
-    except PublicationDurabilityError as error:
+    except (InvalidReplacementTarget, PublicationDurabilityError) as error:
         raise typer.BadParameter(str(error)) from None
     except OSError:
         raise typer.BadParameter(
@@ -322,6 +322,7 @@ def download(podcast: str, episode: str):
         DownloadConflict,
         DuplicateIdentity,
         DownloadError,
+        InvalidReplacementTarget,
         PublicationDurabilityError,
         FilenamePatternError,
         StoreReadError,
