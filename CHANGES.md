@@ -4,7 +4,8 @@
   existing regular-file permissions.
 
 * Save the resolved directory of a legacy subscription on its first successful
-  download so future browsing and downloads use the same episode store.
+  download so future browsing and downloads use the same episode store. A
+  reserved directory or one used by another feed is refused before the transfer.
 
 # 2026-11-17 v0.13
 

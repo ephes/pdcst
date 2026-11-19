@@ -210,8 +210,10 @@ A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
 The first successful download for a legacy subscription saves the selected
 directory in `podcasts.json`. It holds the subscription lock from directory
-selection through publication. Later commands use the saved directory even if
-the other directory appears. If audio is saved but updating the subscription
+selection through publication. A selected directory that is reserved for
+repository storage or already used by another feed is refused before any
+transfer starts; set a distinct directory in `podcasts.json` instead. Later
+commands use the saved directory even if the other directory appears. If audio is saved but updating the subscription
 fails, use the reported directory to repair `podcasts.json` before retrying.
 
 # Contribute

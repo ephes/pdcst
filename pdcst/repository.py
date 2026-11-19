@@ -1403,8 +1403,12 @@ class PodcastRepository(JsonRepository):
 
     @contextmanager
     def download_subscription(self, podcast):
-        """Pin the directory of a legacy subscription after a completed download."""
-        from . import contained_path
+        """Pin the directory of a legacy subscription after a completed download.
+
+        The directory is validated like a subscription directory, and refused
+        when another feed already uses it, before any download starts.
+        """
+        from . import contained_path, subscription_directory
 
         if not podcast._legacy_directory:
             yield podcast, None
@@ -1423,6 +1427,33 @@ class PodcastRepository(JsonRepository):
                 yield current, resolved
                 return
 
+            try:
+                subscription_directory(current.directory, root=root)
+            except ValueError as error:
+                raise DownloadConflict(
+                    f"{error}; set a distinct directory in podcasts.json"
+                ) from None
+
+            def directory_key(directory):
+                return unicodedata.normalize(
+                    "NFC", str(contained_path(root, directory))
+                ).casefold()
+
+            target = directory_key(current.directory)
+            for url, other in rows.items():
+                if url == podcast.feed.url:
+                    continue
+                try:
+                    other_key = directory_key(admitted._listed_podcast(other).directory)
+                except ValueError:
+                    # Unsafe legacy paths cannot own a contained destination.
+                    continue
+                if other_key == target:
+                    raise DownloadConflict(
+                        "Podcast directory is already used by another feed; "
+                        "set a distinct directory in podcasts.json"
+                    )
+
             current.directory = str(resolved.relative_to(root))
             stored.directory = current.directory
             admitted._serialize_models(rows)
@@ -1431,7 +1462,7 @@ class PodcastRepository(JsonRepository):
                 admitted._write_models(rows)
             except PublicationDurabilityError:
                 raise
-            except (OSError, StoreWriteError):
+            except (OSError, StoreWriteError, DirectoryAdmissionError):
                 raise StoreWriteError(
                     f"Audio saved in {resolved}, but the subscription directory "
                     "could not be saved. Check local storage and set the directory "

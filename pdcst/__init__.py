@@ -68,10 +68,10 @@ def contained_path(root, *parts):
     return destination
 
 
-def subscription_directory(directory):
+def subscription_directory(directory, root=None):
     """Contain paths and reserve every component aliasing control storage."""
-    destination = contained_path(settings.root, directory)
-    root = Path(settings.root).resolve()
+    root = Path(settings.root if root is None else root).resolve()
+    destination = contained_path(root, directory)
     reserved = {
         "podcasts.json",
         "podcasts.json.lock",
