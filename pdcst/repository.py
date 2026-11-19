@@ -1081,8 +1081,6 @@ class EpisodeRepository(JsonRepository):
 
     def _usable_audio_files(self, locked):
         """Retain only regular, non-symlink files with one unambiguous owner."""
-        from . import contained_path
-
         candidates = {}
         names = Counter()
         files = Counter()
@@ -1093,20 +1091,19 @@ class EpisodeRepository(JsonRepository):
                 continue
             key = unicodedata.normalize("NFC", name).casefold()
             if (
-                Path(name).name != name
+                name in {".", ".."}
+                or Path(name).name != name
                 or "\\" in name
+                or PureWindowsPath(name).drive
                 or key in reserved
                 or key.startswith((".pdcst-download-", ".pdcst-refresh-"))
             ):
                 continue
             try:
-                if (self.base_dir / name).is_symlink():
-                    continue
-                path = contained_path(self.base_dir, name)
-                info = path.stat()
-                if not stat.S_ISREG(info.st_mode):
-                    continue
-            except (ValueError, RuntimeError, OSError):
+                info = self._stat(self.base_dir / name)
+            except (ValueError, OSError):
+                continue
+            if not stat.S_ISREG(info.st_mode):
                 continue
             identity = (info.st_dev, info.st_ino)
             candidates[row.pk] = (name, key, identity)

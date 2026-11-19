@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -69,6 +70,49 @@ def test_refresh_refuses_invalid_stored_identity(
     with pytest.raises(StoreReadError, match="invalid schema"):
         pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_refresh_drops_audio_replaced_by_symlink(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcasts = PodcastRepository(tmp_path)
+    podcasts.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_file = "saved.mp3"
+    episodes.add(episode)
+    saved = episodes.base_dir / episode.audio_file
+    saved.write_bytes(b"previous audio")
+    other = episodes.base_dir / "other.mp3"
+    other.write_bytes(b"unrelated audio")
+
+    original_stat = os.stat
+    swapped = False
+
+    def swap_before_stat(path, *, dir_fd=None, follow_symlinks=True):
+        nonlocal swapped
+        # Interleave just before the retention stat, after any separate path
+        # checks. The path-based and descriptor-based forms name the same entry.
+        if not swapped and (
+            (path == saved and follow_symlinks)
+            or (path == saved.name and dir_fd is not None)
+        ):
+            saved.unlink()
+            saved.symlink_to(other.name)
+            swapped = True
+        return original_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [episode]
+
+    monkeypatch.setattr(os, "stat", swap_before_stat)
+    pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
+
+    assert swapped
+    assert episodes.list()[0].audio_file is None
+    assert saved.readlink() == Path(other.name)
+    assert other.read_bytes() == b"unrelated audio"
 
 
 @pytest.mark.parametrize(
@@ -354,7 +398,6 @@ def test_refresh_drops_shared_audio_ownership(tmp_path, episode, refresh_both):
 def test_refresh_drops_file_aliases_on_every_host(
     tmp_path, monkeypatch, episode, alias_kind
 ):
-    from pathlib import Path
     from types import SimpleNamespace
 
     first = tmp_path / ("café.mp3" if alias_kind == "unicode" else "saved.mp3")
@@ -370,10 +413,10 @@ def test_refresh_drops_file_aliases_on_every_host(
     if alias_kind == "inode":
         second.write_bytes(b"other synthetic audio")
     info = first.stat()
-    original_stat = Path.stat
+    original_stat = os.stat
 
-    def alias_stat(path, *args, **kwargs):
-        if path == first or path == second:
+    def alias_stat(path, *, dir_fd=None, follow_symlinks=True):
+        if not follow_symlinks and path in (first, second):
             return SimpleNamespace(
                 st_mode=info.st_mode,
                 st_dev=info.st_dev,
@@ -383,9 +426,9 @@ def test_refresh_drops_file_aliases_on_every_host(
                     else info.st_ino + 1
                 ),
             )
-        return original_stat(path, *args, **kwargs)
+        return original_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
-    monkeypatch.setattr(Path, "stat", alias_stat)
+    monkeypatch.setattr(os, "stat", alias_stat)
     episode.audio_file = first.name
     other = copy.deepcopy(episode)
     other.guid = "other"

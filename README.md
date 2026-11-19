@@ -107,9 +107,11 @@ during refresh.
 
 Repeated subscriptions refresh feed metadata and keep existing download associations
 only when the enclosure URL is unchanged and the stored filename still refers
-to a contained regular file without a symlink. The association must have unique
-ownership among stored episodes: case/Unicode-equivalent filenames and aliases
-to the same file are refused. A conflicting association is cleared for each
+to a contained regular file. Subscription refresh checks the filename relative
+to the held episode directory with a single filesystem lookup that leaves
+symlinks unresolved. Each association must have a single owner among stored
+episodes. Refresh refuses case/Unicode-equivalent filenames and aliases to
+the same file. A conflicting association is cleared for each
 refreshed episode; unrelated records stay unchanged. Symlink loops, missing files
 and repository/recovery filenames are also unusable. Refresh never deletes linked
 or conflicting audio bytes. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding

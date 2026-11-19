@@ -3,6 +3,9 @@
 * Reject empty or non-string feed URLs, episode GUIDs and enclosure URLs in
   stored metadata before refreshing either store.
 
+* Check retained audio filenames in the held episode directory without following
+  symlinks during subscription refresh.
+
 * Refuse nonregular replacement destinations, including symlinks, and preserve
   existing regular-file permissions.
 
