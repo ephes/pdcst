@@ -310,14 +310,23 @@ def download(podcast: str, episode: str):
         podcast = find_podcast_by_identifier(podcast, unique=True)
         if podcast is None:
             raise typer.BadParameter("No matching podcast")
-        episode = find_episode_by_identifier(podcast, episode, unique=True)
-        if episode is None:
-            raise typer.BadParameter("No matching episode")
-        EpisodeRepository(
-            contained_path(settings.root, podcast.directory)
-        ).download_episode(
-            episode, podcast.get_audio_file_name(episode), download_with_progress
-        )
+        subscriptions = PodcastRepository(Path(settings.root).resolve())
+        with subscriptions.download_subscription(podcast) as (podcast, directory):
+            if directory is None:
+                episode = find_episode_by_identifier(podcast, episode, unique=True)
+            else:
+                episodes = EpisodeRepository(directory).list(
+                    additional_attributes={"podcast": podcast}
+                )
+                episode = _find_title(episodes, episode, "episode", unique=True)
+            if episode is None:
+                raise typer.BadParameter("No matching episode")
+            directory = directory or contained_path(
+                subscriptions.base_dir, podcast.directory
+            )
+            EpisodeRepository(directory).download_episode(
+                episode, podcast.get_audio_file_name(episode), download_with_progress
+            )
     except (
         DownloadConflict,
         DuplicateIdentity,

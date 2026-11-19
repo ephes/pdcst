@@ -73,6 +73,9 @@ class Podcast:
     derived from the title.
     """
 
+    # Set by the repository when the stored directory still needs to be pinned.
+    _legacy_directory = False
+
     def __init__(
         self,
         *,

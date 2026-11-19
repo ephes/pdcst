@@ -167,6 +167,8 @@ metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
+For a legacy subscription without a saved directory, browsing prefers the
+contained legacy directory if it exists and otherwise uses the sanitized name.
 
 Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes`
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
@@ -206,6 +208,11 @@ title or a more specific substring; duplicate exact titles must first be correct
 in the metadata. Browsing retains its first-substring-match behavior.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
+The first successful download for a legacy subscription saves the selected
+directory in `podcasts.json`. It holds the subscription lock from directory
+selection through publication. Later commands use the saved directory even if
+the other directory appears. If audio is saved but updating the subscription
+fails, use the reported directory to repair `podcasts.json` before retrying.
 
 # Contribute
 
