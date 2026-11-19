@@ -100,6 +100,11 @@ for duplicate stored or incoming repository rows. CLI commands report these as
 concise errors. Restore or correct ambiguous legacy JSON before retrying. Refusal
 preserves existing JSON and audio.
 
+Stored feed URLs, episode GUIDs and enclosure URLs must be nonempty JSON
+strings. Their exact spelling is preserved. A malformed identity reports an
+invalid schema (`StoreReadError`) and leaves both metadata stores unchanged
+during refresh.
+
 Repeated subscriptions refresh feed metadata and keep existing download associations
 only when the enclosure URL is unchanged and the stored filename still refers
 to a contained regular file without a symlink. The association must have unique

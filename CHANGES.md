@@ -1,5 +1,8 @@
 # Unreleased
 
+* Reject empty or non-string feed URLs, episode GUIDs and enclosure URLs in
+  stored metadata before refreshing either store.
+
 * Refuse nonregular replacement destinations, including symlinks, and preserve
   existing regular-file permissions.
 

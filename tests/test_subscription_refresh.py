@@ -1,11 +1,12 @@
 import copy
+import json
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 import pdcst
-from pdcst.repository import EpisodeRepository, PodcastRepository
+from pdcst.repository import EpisodeRepository, PodcastRepository, StoreReadError
 
 
 def test_refresh_preserves_valid_download(tmp_path, monkeypatch, podcast, episode):
@@ -39,6 +40,35 @@ def test_refresh_preserves_valid_download(tmp_path, monkeypatch, podcast, episod
     saved.audio_file = None
     repo.add(saved)
     assert repo.list()[0].audio_file is None
+
+
+@pytest.mark.parametrize("field", ["guid", "audio_url", "url"])
+@pytest.mark.parametrize("invalid", [123, ""])
+def test_refresh_refuses_invalid_stored_identity(
+    tmp_path, monkeypatch, podcast, episode, field, invalid
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcasts = PodcastRepository(tmp_path)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episode.guid = "123"
+    podcasts.add(podcast)
+    episodes.add(episode)
+    assert episodes.list()[0].guid == "123"
+
+    path = podcasts.path if field == "url" else episodes.path
+    rows = json.loads(path.read_bytes())
+    fields = rows[0]["feed"] if field == "url" else rows[0]
+    fields[field] = invalid
+    path.write_text(json.dumps(rows))
+    before = {path: path.read_bytes() for path in (podcasts.path, episodes.path)}
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [episode]
+
+    with pytest.raises(StoreReadError, match="invalid schema"):
+        pdcst.subscribe(podcast.feed.url, "{title}", None, Parser(), podcasts)
+    assert {path: path.read_bytes() for path in before} == before
 
 
 @pytest.mark.parametrize(
