@@ -304,7 +304,7 @@ def list_episodes(identifier: str):
     try:
         podcast = find_podcast_by_identifier(identifier)
         if podcast is None:
-            return
+            raise typer.BadParameter("No matching podcast")
         episodes = list_all_episodes(podcast)
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None

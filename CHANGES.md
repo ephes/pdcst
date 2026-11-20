@@ -1,5 +1,8 @@
 # Unreleased
 
+* Report a missing podcast as a CLI error from `pdcst episodes`. An existing
+  subscription with no episodes still succeeds with empty output.
+
 * Check the audio deadline after opening the stage and setting up progress,
   before reading any response body bytes.
 

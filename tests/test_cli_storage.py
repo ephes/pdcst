@@ -59,12 +59,15 @@ def fresh_command(tmp_path, args, root=None):
     return json.loads(process.stdout)
 
 
-@pytest.mark.parametrize("args", [["--help"], ["podcasts"], ["episodes", "missing"]])
+@pytest.mark.parametrize(
+    "args,exit_code",
+    [(["--help"], 0), (["podcasts"], 0), (["episodes", "missing"], 2)],
+)
 @pytest.mark.parametrize("configured", [False, True])
-def test_fresh_home_readonly_commands(tmp_path, args, configured):
+def test_fresh_home_readonly_commands(tmp_path, args, exit_code, configured):
     root = tmp_path / "custom" if configured else tmp_path / "pdcst"
     result = fresh_command(tmp_path, args, root if configured else None)
-    assert result["exit"] == 0, result
+    assert result["exit"] == exit_code, result
     assert not root.exists()
 
 

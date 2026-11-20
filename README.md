@@ -168,8 +168,9 @@ HTTP Last-Modified remains a date fallback.
 
 `pdcst podcasts` lists stored subscriptions with their episode counts.
 `pdcst episodes amber` lists episode titles for the first subscription whose
-title contains `amber`, ignoring case. An empty store, an empty show or an
-unmatched show produces no output and succeeds. Both commands read local
+title contains `amber`, ignoring case. An unmatched title, including when the store
+is empty, exits with status 2 and reports `No matching podcast`. A matching
+subscription with no episodes succeeds with no output. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next

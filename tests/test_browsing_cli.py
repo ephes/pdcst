@@ -70,7 +70,7 @@ print(json.dumps({
 """
 
 
-def run_browse(root, args, episode_dir=None):
+def run_browse(root, args, episode_dir=None, *, exit_code=0):
     def snapshot():
         return {
             str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
@@ -93,7 +93,7 @@ def run_browse(root, args, episode_dir=None):
     )
     assert process.returncode == 0, process.stderr
     result = json.loads(process.stdout)
-    assert result["exit_code"] == 0, result
+    assert result["exit_code"] == exit_code, result
     assert snapshot() == before
     return result
 
@@ -188,15 +188,16 @@ def test_episodes_lists_only_selected_show(
     ]
 
 
-def test_episodes_no_matching_show_is_silent(browsing_store):
-    result = run_browse(browsing_store, ["episodes", "unknown-show"])
-    assert result["output"] == ""
+def test_episodes_no_matching_show_reports_error(browsing_store):
+    result = run_browse(browsing_store, ["episodes", "unknown-show"], exit_code=2)
+    assert "No matching podcast" in result["output"]
+    assert "Traceback" not in result["output"]
     assert result["opened"] == result["episodes"] == []
 
 
-def test_episodes_empty_store_is_silent(tmp_path):
+def test_episodes_empty_store_reports_error(tmp_path):
     root = tmp_path / "subscriptions"
     root.mkdir()
-    result = run_browse(root, ["episodes", "amber"])
-    assert result["output"] == ""
+    result = run_browse(root, ["episodes", "amber"], exit_code=2)
+    assert "No matching podcast" in result["output"]
     assert result["opened"] == result["episodes"] == []
