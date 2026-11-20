@@ -421,11 +421,12 @@ changes the process umask. The containing directory is then synced
 before success. Failures before replacement retain the previous file and do not
 mark an episode downloaded. Filesystem errors propagate to the caller.
 The replacement helper closes its descriptor even if opening the stream fails;
-flush, permission-copy, file-sync, close or rename failures remove only its owned
-temporary file and preserve the destination. A directory-sync failure or interruption after a
-successful replacement raises `pdcst.storage.PublicationDurabilityError`
-(`OSError`): the new
-file is already visible, but its durability across power loss is uncertain.
+flush, permission-copy, file-sync, close or rename failures preserve the
+destination. Cleanup attempts to remove only the owned temporary file, and an
+unlink error leaves the original failure in place. A successful replacement
+consumes the temporary name. A subsequent directory-sync failure or
+interruption raises `pdcst.storage.PublicationDurabilityError` (`OSError`).
+The new file is already visible, but its durability across power loss is uncertain.
 The CLI reports that state without raw filesystem exception details. Unrelated
 temporary files remain.
 
@@ -590,7 +591,8 @@ refresh never takes the download claim lock. Failed refreshes release the lock
 and can be retried. Do not remove `.feed-locks/` files while commands are running.
 
 Metadata reads compare the opened descriptor's device/inode, size and nanosecond
-modification/change timestamps after the bounded read. In-place rewrites are
+modification/change timestamps after the bounded read. The byte count must
+match the admitted size before JSON parsing. In-place rewrites are
 refused as a changed generation, including same-size rewrites. Atomic replacement
 can still return the coherent old descriptor (unlink-only change timestamps do
 not invalidate unchanged bytes). Retry after an external writer finishes.

@@ -1,5 +1,11 @@
 # Unreleased
 
+* Preserve the original replacement failure if removing the stage also fails,
+  and skip stage removal once its name has been consumed by replacement.
+
+* Refuse metadata reads whose byte count differs from the admitted file size,
+  even when the bytes form valid JSON.
+
 * Fold each title once when looking for a unique match, and stop at the first
   substring match when uniqueness is not required.
 

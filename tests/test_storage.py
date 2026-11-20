@@ -255,3 +255,56 @@ def test_exclusive_open_failure_does_not_remove_existing_temp(tmp_path, monkeypa
             pytest.fail("exclusive open should fail before yielding")
     assert occupied.read_bytes() == b"belongs to someone else"
     assert target.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("outcome", ["body failure", "sync failure", "success"])
+def test_stage_cleanup_preserves_publication_result(
+    tmp_path, monkeypatch, relative, outcome
+):
+    target = tmp_path / "saved"
+    target.write_text("original")
+    body_error = ValueError("synthetic body failure")
+    unlinks = []
+
+    def fail_unlink(path, *, dir_fd=None):
+        unlinks.append((Path(path).suffix, dir_fd))
+        raise PermissionError("synthetic unlink failure")
+
+    def fail_sync(*args, **kwargs):
+        raise OSError("synthetic sync failure")
+
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if relative else None
+
+    def publish():
+        with storage.replacement_file(target, directory_fd=directory_fd) as output:
+            output.write("new")
+            if outcome == "body failure":
+                raise body_error
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "unlink", fail_unlink)
+            patch.setattr(storage.os, "unlink", fail_unlink)
+            if outcome == "body failure":
+                with pytest.raises(ValueError) as caught:
+                    publish()
+                assert caught.value is body_error
+            elif outcome == "sync failure":
+                patch.setattr(storage, "sync_directory", fail_sync)
+                with pytest.raises(storage.PublicationDurabilityError):
+                    publish()
+            else:
+                publish()
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    if outcome == "body failure":
+        assert unlinks == [(".tmp", directory_fd)]
+        assert len(list(tmp_path.glob(".*.tmp"))) == 1
+        assert target.read_text() == "original"
+    else:
+        assert not unlinks
+        assert not list(tmp_path.glob(".*.tmp"))
+        assert target.read_text() == "new"

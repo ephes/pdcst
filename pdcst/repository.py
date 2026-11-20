@@ -480,6 +480,8 @@ class JsonRepository:
                     info.st_ctime_ns != after.st_ctime_ns and not unlinked
                 ):
                     raise StoreReadError(self.path, "file generation changed; retry")
+                if len(data) != info.st_size:
+                    raise StoreReadError(self.path, "incomplete read; retry")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         return data

@@ -92,21 +92,23 @@ def replacement_file(target, *, binary=False, directory_fd=None):
                 src_dir_fd=directory_fd,
                 dst_dir_fd=directory_fd,
             )
-        try:
-            if directory_fd is None:
-                sync_directory(target.parent)
-            else:
-                sync_directory(target.parent, directory_fd=directory_fd)
-        except (OSError, KeyboardInterrupt):
-            raise PublicationDurabilityError(target) from None
-    finally:
+    except BaseException:
+        # Only failures before replacement can leave the owned staging name.
         try:
             if directory_fd is None:
                 temporary.unlink()
             else:
                 os.unlink(temporary.name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
+        except OSError:
+            pass  # Preserve the original publication failure.
+        raise
+    try:
+        if directory_fd is None:
+            sync_directory(target.parent)
+        else:
+            sync_directory(target.parent, directory_fd=directory_fd)
+    except (OSError, KeyboardInterrupt):
+        raise PublicationDurabilityError(target) from None
 
 
 class DirectoryAdmissionError(ValueError):
