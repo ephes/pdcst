@@ -34,6 +34,7 @@ from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
 from pydantic import BaseModel, ValidationError, conint, constr, parse_obj_as, validator
 
 from .config import settings
+from .download import DownloadError
 from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
 from .storage import (
     DirectoryAdmissionError,
@@ -49,12 +50,16 @@ AUDIO_DESTINATION_SCAN_MAX_ENTRIES = 10_000
 AUDIO_DESTINATION_SCAN_MAX_SECONDS = 1.0
 
 
+def _audio_size_admitted(info):
+    return 0 < info.st_size <= settings.audio_max_bytes
+
+
 @dataclass
 class _DestinationScanBudget:
     entries: int
     seconds: float
-    # Admission may use at most half, so the mandatory publication recheck of
-    # the same directory (plus its stage) still fits the remaining budget.
+    # Reserve more than half of the entries (and half of the time) for the
+    # mandatory publication recheck, which also sees the transfer stage.
     reserve_recheck: bool = False
 
 
@@ -737,10 +742,7 @@ class EpisodeRepository(JsonRepository):
             raise DownloadConflict(
                 "Audio stage unavailable or generation changed"
             ) from None
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or not 0 < info.st_size <= settings.audio_max_bytes
-        ):
+        if not stat.S_ISREG(info.st_mode) or not _audio_size_admitted(info):
             raise DownloadConflict(
                 "Audio stage must be a nonempty regular file within the audio byte limit"
             )
@@ -835,7 +837,11 @@ class EpisodeRepository(JsonRepository):
                 AUDIO_DESTINATION_SCAN_MAX_ENTRIES, AUDIO_DESTINATION_SCAN_MAX_SECONDS
             )
         started = time.monotonic()
-        entries_left = budget.entries // 2 if budget.reserve_recheck else budget.entries
+        # Admission reserves one more entry than it may use: the recheck lists
+        # the same directory plus the transfer stage.
+        entries_left = (
+            (budget.entries - 1) // 2 if budget.reserve_recheck else budget.entries
+        )
         deadline = started + (
             budget.seconds / 2 if budget.reserve_recheck else budget.seconds
         )
@@ -856,13 +862,15 @@ class EpisodeRepository(JsonRepository):
             with self._directory_entries() as entries:
                 while True:
                     check_time()
-                    if consumed >= entries_left:
-                        refuse()
                     try:
                         entry = next(entries)
                     except StopIteration:
                         check_time()
                         return False
+                    check_time()
+                    # At the cap, this entry serves only as an overflow sentinel.
+                    if consumed >= entries_left:
+                        refuse()
                     consumed += 1
                     entry_key = unicodedata.normalize("NFC", entry.name).casefold()
                     check_time()
@@ -932,7 +940,12 @@ class EpisodeRepository(JsonRepository):
             rollback_failed = False
             stage_descriptor = None
             try:
-                transfer(episode.audio_url, stage, directory_fd=self._directory_fd)
+                try:
+                    transfer(episode.audio_url, stage, directory_fd=self._directory_fd)
+                except PublicationDurabilityError:
+                    raise DownloadError(
+                        "Unable to stage audio download: directory sync failed"
+                    ) from None
                 try:
                     stage_descriptor = os.open(
                         stage.name,
@@ -1129,8 +1142,9 @@ class EpisodeRepository(JsonRepository):
                             self._unlink(stage)
 
     def _usable_audio_files(self, locked):
-        """Retain only regular, non-symlink files with one unambiguous owner."""
+        """Retain only size-admitted regular files with one unambiguous owner."""
         candidates = {}
+        refused_size = 0
         names = Counter()
         files = Counter()
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
@@ -1162,9 +1176,19 @@ class EpisodeRepository(JsonRepository):
             if not stat.S_ISREG(info.st_mode):
                 continue
             identity = (info.st_dev, info.st_ino)
-            candidates[row.pk] = (name, key, identity)
             names[key] += 1
             files[identity] += 1
+            if _audio_size_admitted(info):
+                candidates[row.pk] = (name, key, identity)
+            else:
+                refused_size += 1
+        if refused_size:
+            warnings.warn(
+                f"Ignoring {refused_size} retained audio references to empty files "
+                "or files over the audio byte limit",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return {
             guid: name
             for guid, (name, key, identity) in candidates.items()

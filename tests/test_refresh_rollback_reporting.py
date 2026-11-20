@@ -109,8 +109,9 @@ def test_backup_write_failure_leaves_no_recovery_file(
     assert not list(episodes.base_dir.glob(".pdcst-refresh-*"))
 
 
-def test_stage_directory_sync_failure_is_an_ordinary_download_failure(
-    tmp_path, monkeypatch, episode
+@pytest.mark.parametrize("direct", [False, True])
+def test_download_directory_sync_failure_reports_target_outcome(
+    tmp_path, monkeypatch, episode, direct
 ):
     data = b"synthetic audio bytes"
     client = httpx.Client
@@ -129,6 +130,9 @@ def test_stage_directory_sync_failure_is_an_ordinary_download_failure(
         ),
     )
     repo = EpisodeRepository(tmp_path)
+    target = tmp_path / "saved.mp3"
+    target.write_bytes(b"previous audio")
+    episode.audio_file = target.name
     repo.add(episode)
     before = repo.path.read_bytes()
     sync = os.fsync
@@ -139,9 +143,20 @@ def test_stage_directory_sync_failure_is_an_ordinary_download_failure(
         sync(fd)
 
     monkeypatch.setattr(os, "fsync", fsync)
-    with pytest.raises(DownloadError, match="Unable to stage audio download") as raised:
-        repo.download_episode(episode, "saved.mp3", download_with_progress)
-    assert ".pdcst-download-" not in str(raised.value)
+    if direct:
+        with pytest.raises(
+            PublicationDurabilityError, match="durability uncertain"
+        ) as raised:
+            download_with_progress(episode.audio_url, target)
+        assert raised.value.path == target
+        assert target.read_bytes() == data
+    else:
+        with pytest.raises(
+            DownloadError, match="Unable to stage audio download"
+        ) as raised:
+            repo.download_episode(episode, target.name, download_with_progress)
+        assert ".pdcst-download-" not in str(raised.value)
+        assert target.read_bytes() == b"previous audio"
     assert repo.path.read_bytes() == before
-    assert not (tmp_path / "saved.mp3").exists()
     assert not list(tmp_path.glob(".pdcst-download-*"))
+    assert not list(tmp_path.glob("*.tmp"))

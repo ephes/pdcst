@@ -167,10 +167,7 @@ class Podcast:
         except ValueError:
             raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
 
-    def get_audio_file_name(self, episode):
-        """
-        Use the file_name_pattern to build a name for episodes audio files.
-        """
+    def _audio_file_format(self, episode):
         path = urlsplit(episode.audio_url).path
         _, separator, suffix = path.rsplit("/", 1)[-1].rpartition(".")
         suffix = suffix.lower() if separator else ""
@@ -182,12 +179,19 @@ class Podcast:
         if file_format is None:
             # Preserve legacy records' filename behavior when no type was stored.
             file_format = self.title_for_filename(path.rsplit(".", 1)[-1])
-        details = {
-            "file_format": file_format,
-            "index": episode.index,
-            "title": self.title_for_filename(episode.title),
-        }
+        return file_format
+
+    def get_audio_file_name(self, episode):
+        """Use the filename pattern to build a name for an episode's audio."""
         parts = self._filename_pattern_parts()
+        fields = {field for _, field, _, _ in parts}
+        details = {}
+        if "index" in fields:
+            details["index"] = episode.index
+        if "title" in fields:
+            details["title"] = self.title_for_filename(episode.title)
+        if "file_format" in fields:
+            details["file_format"] = self._audio_file_format(episode)
         try:
             chunks = []
             size = 0

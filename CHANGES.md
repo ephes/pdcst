@@ -1,5 +1,18 @@
 # Unreleased
 
+* Prepare only the episode fields used in an audio filename pattern, once per
+  field.
+
+* Accept complete audio destination scans at the exact entry cap, including
+  the publication recheck. Admission now processes at most 4,999 entries so
+  the recheck always has room for the transfer stage.
+
+* Report uncertain durability after direct audio replacement and keep stage-sync
+  failures classified as download errors for repository-owned transfers.
+
+* Clear retained download references to empty or oversized audio on refresh,
+  warning with a count and leaving the files untouched.
+
 * Refuse legacy subscriptions whose derived directory collides with another
   feed's directory after normalization: `podcasts` names the affected feeds,
   `episodes` and `download` refuse only those feeds, and the API raises

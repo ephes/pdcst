@@ -113,6 +113,9 @@ repository/recovery names, and files with ambiguous ownership, including
 case/Unicode-equivalent names and aliases to the same file. Episodes in the
 current feed also lose their association if the enclosure URL changed.
 Historical episodes keep their feed metadata and usable audio references.
+Refresh also clears references to empty files and files over
+`PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
+references. Files exactly at the limit remain eligible.
 A permission or I/O error while checking a retained file aborts the refresh
 before either metadata store changes; a stored name that cannot exist (too long
 or an invalid byte sequence for the filesystem) counts as missing. Refresh leaves all physical audio entries
@@ -338,6 +341,8 @@ grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`, `n` (not `c`);
 string fields accept width (not starting with `0`) and/or `.precision`,
 optionally followed by `s`. For example, `{index:03d}_{title:.100}.{file_format}`
 limits the title to 100 characters and `{index:>3}` right-aligns the index.
+Only referenced fields are prepared, so `{index:03}.mp3` needs neither title
+sanitization nor extension lookup. Repeated fields reuse their prepared values.
 Other format syntax is refused before formatting. Patterns are limited to 4,096
 characters and the complete basename to 255 UTF-8 bytes, including literals and
 repeated fields; excess output is rejected rather than truncated. Existing
@@ -371,11 +376,13 @@ Browsing a missing root still creates no directories.
 Before transferring into an unowned audio filename, download scans the admitted
 folder for Unicode/case-equivalent names. Admission and publication share a fixed
 budget of 10,000 directory entries and one second of active scan time, including
-iterator acquisition/advancement and name normalization. Admission may use at
-most half of it, so the mandatory publication recheck of the same folder (plus
-the transfer stage) still fits; folders with about 5,000 or more entries are
-refused before any transfer. Transfer time and lock waiting do not consume that
-scan time. An incomplete scan refuses the download explicitly; unseen entries
+iterator acquisition/advancement and name normalization. Admission may process
+up to 4,999 entries and use up to half the scan time, so the mandatory
+publication recheck of the same folder plus the transfer stage still fits the
+remainder; folders with 5,000 or more entries are refused before any transfer.
+At either entry cap, one additional iterator step checks for the end of the
+listing within the deadline. An extra entry causes refusal before its name is
+normalized. Transfer time and lock waiting do not consume scan time. An incomplete scan refuses the download explicitly; unseen entries
 are never assumed free. If the budget expires only on the publication recheck
 (for example because the folder grew during the transfer), completed audio is retained as a recovery stage and
 metadata stays unchanged. Move unrelated directory entries aside or select a
@@ -426,9 +433,12 @@ values raise `DownloadError` before creating output. A valid length
 must match the received bytes. A response must contain at least one body byte;
 empty success responses raise `DownloadError` and preserve previous audio and
 metadata, including zero-length and empty chunked responses. A directory-sync
-failure while staging the transfer is reported as an ordinary download failure
-(`DownloadError`); the stage is removed and nothing is published. This is a transfer
-completeness check, not an audio codec validation. Responses with a content
+failure while staging a repository transfer is reported as `DownloadError`.
+The repository removes its stage and preserves previous audio and metadata.
+For direct `download_with_progress` calls, a directory-sync failure after
+replacement raises `pdcst.storage.PublicationDurabilityError`. Its `path`
+contains the complete replacement bytes, with uncertain durability. The
+response checks verify transfer completeness without validating the audio codec. Responses with a content
 encoding other than identity are rejected. Replacements preserve the permissions
 of existing regular files and refuse symlinks and other nonregular destinations
 before publication. New files use 0666 filtered by the process umask.

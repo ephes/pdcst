@@ -1,5 +1,6 @@
 """Finite directory-ownership work, without large real directory fixtures."""
 
+import os
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -55,7 +56,7 @@ def test_incomplete_scan_refuses_before_transfer_and_releases_locks(
         pytest.fail("An incomplete scan must not reach transfer")
 
     with monkeypatch.context() as patch:
-        # Admission may use half of the budget; the rest is kept for the recheck.
+        # Admission may use 3 of 8 entries; the rest is kept for the recheck.
         patch.setattr(
             repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 8, raising=False
         )
@@ -129,8 +130,8 @@ def test_admission_and_publication_share_scan_budget(
             DownloadConflict, match="ownership scan incomplete.*retained at"
         ):
             repo.download_episode(episode, "saved.mp3", slow_transfer)
-    # Admission: 2 entries. Recheck: the remaining 3 (time) or 4 (entries).
-    assert len(consumed) == (5 if limit == "time" else 6)
+    # Admission: 2 entries. Recheck: 3 before expiry or 4 plus the sentinel.
+    assert len(consumed) == (5 if limit == "time" else 7)
     assert calls == [True]
     assert repo.path.read_bytes() == before
     assert not (repo.base_dir / "saved.mp3").exists()
@@ -183,6 +184,113 @@ def test_admission_reserves_budget_for_publication_recheck(
     assert not list(repo.base_dir.glob(".pdcst-download-*"))
 
 
+@pytest.mark.parametrize("overflow_at", [None, "admission", "publication"])
+def test_destination_scan_checks_eof_at_entry_cap(
+    unowned_store, episode, monkeypatch, overflow_at
+):
+    repo = unowned_store
+    previous = repo.path.read_bytes()
+    scans = []
+    sentinels = []
+
+    @contextmanager
+    def entries(self):
+        phase = "admission" if not scans else "publication"
+        scans.append(phase)
+
+        def rows():
+            for index in range(3):
+                yield SimpleNamespace(name=f"unrelated-{index}")
+            if phase == "publication":
+                # The recheck also lists the transfer stage.
+                yield SimpleNamespace(name=".pdcst-download-stage")
+            sentinels.append(phase)
+            if phase == overflow_at:
+                # This object has no name and must never reach normalization.
+                yield object()
+
+        yield rows()
+
+    # Admission may process 3 entries; the recheck gets the remaining 4.
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 7)
+    monkeypatch.setattr(repository.EpisodeRepository, "_directory_entries", entries)
+    if overflow_at is None:
+        target = repo.download_episode(episode, "saved.mp3", transfer)
+        assert target.read_bytes() == b"completed audio"
+        assert repo.all[episode.guid].audio_file == target.name
+    else:
+        with pytest.raises(DownloadConflict, match="ownership scan incomplete"):
+            repo.download_episode(episode, "saved.mp3", transfer)
+        assert repo.path.read_bytes() == previous
+        assert not (repo.base_dir / "saved.mp3").exists()
+        stages = list(repo.base_dir.glob(".pdcst-download-*"))
+        assert [stage.read_bytes() for stage in stages] == (
+            [b"completed audio"] if overflow_at == "publication" else []
+        )
+    expected = ["admission"]
+    if overflow_at != "admission":
+        expected.append("publication")
+    assert sentinels == scans == expected
+
+
+@pytest.mark.parametrize("fits", [True, False])
+def test_real_directory_at_admission_cap_fits_publication_recheck(
+    unowned_store, episode, monkeypatch, fits
+):
+    """Admission at its cap leaves room for the recheck to see the real stage."""
+    repo = unowned_store
+    previous = repo.path.read_bytes()
+    # Create the lock files up front so the listing does not grow during the scan.
+    for suffix in (".lock", ".download.lock"):
+        repo.path.with_suffix(repo.path.suffix + suffix).touch()
+    for index in range(3):
+        (repo.base_dir / f"unrelated-{index}").write_bytes(b"x")
+    count = len(os.listdir(repo.base_dir))
+    calls = []
+
+    def counting_transfer(*args, **kwargs):
+        calls.append(True)
+        transfer(*args, **kwargs)
+
+    # Admission may process (max - 1) // 2 entries.
+    max_entries = 2 * count + 1 if fits else 2 * count
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", max_entries)
+    if fits:
+        target = repo.download_episode(episode, "saved.mp3", counting_transfer)
+        assert target.read_bytes() == b"completed audio"
+        assert repo.all[episode.guid].audio_file == target.name
+    else:
+        with pytest.raises(DownloadConflict, match="ownership scan incomplete"):
+            repo.download_episode(episode, "saved.mp3", counting_transfer)
+        assert repo.path.read_bytes() == previous
+        assert not (repo.base_dir / "saved.mp3").exists()
+    assert calls == ([True] if fits else [])
+    assert not list(repo.base_dir.glob(".pdcst-download-*"))
+
+
+def test_destination_scan_checks_deadline_after_sentinel_eof(
+    unowned_store, episode, monkeypatch
+):
+    clock = [0.0]
+
+    @contextmanager
+    def entries(self):
+        def rows():
+            yield SimpleNamespace(name="unrelated")
+            clock[0] = 1.0
+
+        yield rows()
+
+    # Admission may process 1 entry; the EOF sentinel arrives at the deadline.
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 3)
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_SECONDS", 2.0)
+    monkeypatch.setattr(repository.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(repository.EpisodeRepository, "_directory_entries", entries)
+    with pytest.raises(DownloadConflict, match="ownership scan incomplete"):
+        unowned_store.download_episode(episode, "saved.mp3", transfer)
+    assert clock[0] == 1.0
+
+
 def test_alias_match_at_last_allowed_entry_is_still_unowned(
     unowned_store, episode, monkeypatch
 ):
@@ -195,8 +303,8 @@ def test_alias_match_at_last_allowed_entry_is_still_unowned(
 
         yield rows()
 
-    # Admission may use half: the alias is the last entry it can inspect.
-    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 4)
+    # Admission may use (5 - 1) // 2 entries: the alias is the last it can inspect.
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 5)
     monkeypatch.setattr(repository.EpisodeRepository, "_directory_entries", entries)
     with pytest.raises(DownloadConflict, match="unowned existing file"):
         unowned_store.download_episode(episode, "café.mp3", transfer)
