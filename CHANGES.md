@@ -1,5 +1,7 @@
 # Unreleased
 
+* Validate stored download filename patterns before reading episodes.
+
 * Use the same case-insensitive podcast selection for `pdcst episodes` and
   `pdcst download`, preferring an exact title and refusing ambiguous matches.
 

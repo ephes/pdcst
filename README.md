@@ -453,6 +453,8 @@ transfer and again during publication; an invalid destination leaves its entry
 and metadata untouched, without creating a publication intent. A destination
 generation that changes after the intent is written is also refused before old
 audio is moved, and the unused intent is retired.
+Download validates the stored filename pattern syntax before reading episodes.
+The rendered filename is checked against the byte limit after episode selection.
 Use a distinct filename pattern (for
 example, one including `{index}`) to resolve episode name collisions.
 

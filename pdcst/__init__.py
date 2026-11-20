@@ -325,6 +325,7 @@ def download(podcast: str, episode: str):
             raise typer.BadParameter("No matching podcast")
         subscriptions = PodcastRepository(Path(settings.root).resolve())
         with subscriptions.download_subscription(podcast) as (podcast, directory):
+            podcast.validate_audio_filename_pattern()
             if directory is None:
                 episode = find_episode_by_identifier(podcast, episode, unique=True)
             else:
