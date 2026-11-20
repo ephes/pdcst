@@ -709,14 +709,21 @@ class EpisodeRepository(JsonRepository):
             raise DownloadConflict("Audio stage generation changed")
         return info
 
-    def _audio_destination_info(self, target):
-        """An existing owned destination must be a regular, non-link file."""
+    def _existing_audio_info(self, path):
+        """Read one no-follow stat, with absence represented by None."""
         try:
-            info = self._stat(target)
+            return self._stat(path)
         except FileNotFoundError:
             return None
-        if not stat.S_ISREG(info.st_mode):
-            raise DownloadConflict("Audio destination must be a regular file")
+
+    def _audio_destination_info(self, target):
+        """An existing owned destination must be a regular, non-link file."""
+        info = self._existing_audio_info(target)
+        if info is not None:
+            if stat.S_ISLNK(info.st_mode):
+                raise DownloadConflict("Audio destination must not be a symlink")
+            if not stat.S_ISREG(info.st_mode):
+                raise DownloadConflict("Audio destination must be a regular file")
         return info
 
     def _download_record(self, locked, guid, audio_url, name, scan_budget=None):
@@ -737,9 +744,7 @@ class EpisodeRepository(JsonRepository):
         ):
             raise DownloadConflict("Episode name must be a single relative file name")
         target = self.base_dir / name
-        if self._exists(target) and stat.S_ISLNK(self._stat(target).st_mode):
-            raise DownloadConflict("Audio destination must not be a symlink")
-        self._audio_destination_info(target)
+        target_info = self._audio_destination_info(target)
         current = locked.get(guid)
         if current is None or current.audio_url != audio_url:
             raise DownloadConflict(
@@ -752,12 +757,16 @@ class EpisodeRepository(JsonRepository):
         def path_key(filename):
             if Path(filename).name != filename or "\\" in filename:
                 raise ValueError("Unsafe audio association")
-            path = self.base_dir / filename
-            if self._exists(path) and not stat.S_ISREG(self._stat(path).st_mode):
+            info = (
+                target_info
+                if filename == name
+                else self._existing_audio_info(self.base_dir / filename)
+            )
+            if info is not None and not stat.S_ISREG(info.st_mode):
                 raise ValueError("Unsafe audio association")
             return name_key(filename)
 
-        key = path_key(name)
+        key = name_key(name)
         for row in locked.values():
             if row.guid == guid or not row.audio_file:
                 continue
@@ -772,14 +781,14 @@ class EpisodeRepository(JsonRepository):
                 )
         owned = current.audio_file == name
         # Conservative case folding gives the same refusal policy on every host.
-        occupied = self._exists(target)
+        occupied = target_info is not None
         if not owned and not occupied:
-            occupied = self._scan_audio_destination(name_key(name), scan_budget)
+            occupied = self._scan_audio_destination(key, scan_budget)
         if not owned and occupied:
             raise DownloadConflict(
                 "Audio destination contains an unowned existing file"
             )
-        return current, target
+        return current, target, target_info
 
     def _scan_audio_destination(self, key, budget):
         if budget is None:
@@ -900,11 +909,10 @@ class EpisodeRepository(JsonRepository):
                 check_directory()
                 with self._lock():
                     locked = self._fetch_all()
-                    current, target = self._download_record(
+                    current, target, target_info = self._download_record(
                         locked, episode.guid, episode.audio_url, name, scan_budget
                     )
                     check_directory()
-                    target_info = self._audio_destination_info(target)
                     if self._audio_generation(
                         self._audio_stage_info(stage, stage_descriptor)
                     ) != self._audio_generation(stage_info):

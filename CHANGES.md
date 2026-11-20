@@ -1,5 +1,7 @@
 # Unreleased
 
+* Use a single no-follow lookup per file during download ownership checks.
+
 * Reuse one validated subscription catalog for refresh preflight and publication.
 
 * Validate stored download filename patterns before reading episodes.

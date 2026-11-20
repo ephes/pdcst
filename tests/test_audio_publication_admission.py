@@ -1,11 +1,12 @@
 """Synthetic callback barriers for audio publication admission."""
 
+import copy
 import os
 from pathlib import Path
 
 import pytest
 
-from pdcst.repository import AUDIO_INTENT, DownloadConflict
+from pdcst.repository import AUDIO_INTENT, DownloadConflict, EpisodeRepository
 
 
 @pytest.mark.parametrize("when", ["before", "during"])
@@ -239,3 +240,45 @@ def test_stage_change_while_moving_previous_audio_restores_it(
     assert repo.path.read_bytes() == before
     assert not (repo.base_dir / AUDIO_INTENT).exists()
     assert not list(repo.base_dir.glob("*.previous"))
+
+
+@pytest.mark.parametrize("candidate", ["destination", "association"])
+def test_download_admission_uses_one_stat_if_audio_disappears(
+    publication_store, episode, monkeypatch, candidate
+):
+    _, repo = publication_store
+    target = repo.base_dir / "unowned.mp3"
+    if candidate == "association":
+        sibling = copy.deepcopy(episode)
+        sibling.guid = "synthetic-sibling"
+        sibling.audio_file = "sibling.mp3"
+        repo.add(sibling)
+        disappearing = repo.base_dir / sibling.audio_file
+    else:
+        disappearing = target
+    disappearing.write_bytes(b"synthetic audio")
+
+    original = EpisodeRepository._stat
+    probes = []
+
+    def remove_after_stat(self, path):
+        if path == disappearing:
+            assert self._directory_fd is not None
+            probes.append(path)
+            info = original(self, path)
+            disappearing.unlink()
+            return info
+        return original(self, path)
+
+    def transfer(*args, **kwargs):
+        if candidate == "destination":
+            pytest.fail("unowned destination reached transfer")
+        raise DownloadConflict("synthetic transfer stopped")
+
+    monkeypatch.setattr(EpisodeRepository, "_stat", remove_after_stat)
+    expected = (
+        "unowned existing file" if candidate == "destination" else "transfer stopped"
+    )
+    with pytest.raises(DownloadConflict, match=expected):
+        repo.download_episode(episode, target.name, transfer)
+    assert probes == [disappearing]
