@@ -216,16 +216,29 @@ def _find_title(items, identifier, kind, unique):
     key = identifier.casefold()
     if unique and not key.strip():
         raise SelectionError(f"Empty {kind} identifier; use a title")
-    matches = [item for item in items if key in item.title.casefold()]
-    if unique:
-        exact = [item for item in matches if key == item.title.casefold()]
-        matches = exact or matches
-        if len(matches) > 1:
-            raise SelectionError(
-                f"Ambiguous {kind} ({len(matches)} matches); "
-                "use an exact title or a more specific title substring"
-            )
-    return next(iter(matches), None)
+    first_match = first_exact = None
+    match_count = exact_count = 0
+    for item in items:
+        title = item.title.casefold()
+        if key not in title:
+            continue
+        if not unique:
+            return item
+        if match_count == 0:
+            first_match = item
+        match_count += 1
+        if title == key:
+            if exact_count == 0:
+                first_exact = item
+            exact_count += 1
+
+    count = exact_count or match_count
+    if count > 1:
+        raise SelectionError(
+            f"Ambiguous {kind} ({count} matches); "
+            "use an exact title or a more specific title substring"
+        )
+    return first_exact if exact_count else first_match
 
 
 def find_podcast_by_identifier(identifier: str, *, unique=False) -> Podcast | None:

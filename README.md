@@ -212,12 +212,16 @@ Downloads require a unique match for both titles; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact
 title or a more specific substring; duplicate exact titles must first be corrected
-in the metadata. Browsing retains its first-substring-match behavior.
+in the metadata. Download selection counts matches and checks for exact titles
+in one pass. Browsing stops matching at the first substring match.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
 The first successful download for a legacy subscription saves the selected
 directory in `podcasts.json`. It holds the subscription lock from directory
-selection through publication. A selected directory that is reserved for
+selection through publication while the directory still needs to be saved. If
+another command saves a directory before the download reloads the subscription,
+the download uses that directory and releases the subscription lock before
+transfer. A directory selected for migration that is reserved for
 repository storage or already used by another feed is refused before any
 transfer starts; set a distinct directory in `podcasts.json` instead. Later
 commands use the saved directory even if the other directory appears. If audio is saved but updating the subscription

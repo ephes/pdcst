@@ -1414,7 +1414,8 @@ class PodcastRepository(JsonRepository):
             yield podcast, None
             return
 
-        with self.admitted(create=False) as admitted, admitted._lock():
+        with self.admitted(create=False) as admitted, ExitStack() as migration:
+            migration.enter_context(admitted._lock())
             rows = admitted._fetch_all()
             stored = rows.get(podcast.feed.url)
             if stored is None:
@@ -1424,6 +1425,7 @@ class PodcastRepository(JsonRepository):
             resolved = contained_path(root, current.directory)
             admitted._check_directory()
             if stored.directory is not None:
+                migration.close()
                 yield current, resolved
                 return
 
