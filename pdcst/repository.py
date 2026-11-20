@@ -118,6 +118,27 @@ class _StoreGenerationError(StoreReadError):
     """The read did not obtain one complete metadata generation."""
 
 
+class SharedDirectoryError(StoreReadError):
+    """Legacy subscriptions map to a directory another feed uses.
+
+    ``podcasts`` holds the full listing and ``shared`` the subscriptions
+    involved; the message itself contains no stored values.
+    """
+
+    def __init__(self, path, podcasts, shared):
+        self.podcasts = podcasts
+        self.shared = shared
+        super().__init__(
+            path,
+            "Podcast directory is already used by another feed; "
+            "choose a distinct --podcast-dir for one subscription",
+        )
+
+
+# A stored name that cannot refer to any directory entry retains no audio.
+_ABSENT_NAME_ERRNOS = frozenset({errno.ENOENT, errno.ENAMETOOLONG, errno.EILSEQ})
+
+
 class StoreWriteError(ValueError):
     """Metadata cannot be safely written or its advisory lock admitted."""
 
@@ -1129,9 +1150,15 @@ class EpisodeRepository(JsonRepository):
                 continue
             try:
                 info = self._stat(self.base_dir / name)
-            except (FileNotFoundError, ValueError):
-                # Absent entries and invalid path strings cannot retain audio.
+            except ValueError:
+                # Invalid path strings cannot retain audio.
                 continue
+            except OSError as error:
+                # Absent entries and impossible names cannot retain audio;
+                # permission and I/O failures abort the refresh.
+                if error.errno in _ABSENT_NAME_ERRNOS:
+                    continue
+                raise
             if not stat.S_ISREG(info.st_mode):
                 continue
             identity = (info.st_dev, info.st_ino)
@@ -1435,23 +1462,22 @@ class PodcastRepository(JsonRepository):
         if not any(podcast._legacy_directory for podcast in podcasts):
             return podcasts
 
-        owners = {}
+        groups = {}
         for podcast in podcasts:
             try:
                 key = _subscription_directory_key(self.base_dir, podcast.directory)
             except ValueError:
                 # Unsafe legacy paths cannot own a contained destination.
                 continue
-            owner = owners.get(key)
-            if owner is not None and (
-                owner._legacy_directory or podcast._legacy_directory
-            ):
-                raise StoreReadError(
-                    self.path,
-                    "Podcast directory is already used by another feed; "
-                    "choose a distinct --podcast-dir for one subscription",
-                )
-            owners[key] = podcast
+            groups.setdefault(key, []).append(podcast)
+        shared = [
+            podcast
+            for group in groups.values()
+            if len(group) > 1 and any(item._legacy_directory for item in group)
+            for podcast in group
+        ]
+        if shared:
+            raise SharedDirectoryError(self.path, podcasts, shared)
         return podcasts
 
     @contextmanager

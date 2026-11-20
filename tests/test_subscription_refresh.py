@@ -1,13 +1,20 @@
 import copy
+import errno
 import json
 import os
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import typer
 
 import pdcst
-from pdcst.repository import EpisodeRepository, PodcastRepository, StoreReadError
+from pdcst.repository import (
+    EpisodeRepository,
+    PodcastRepository,
+    SharedDirectoryError,
+    StoreReadError,
+)
 
 
 def test_refresh_preserves_valid_download(tmp_path, monkeypatch, podcast, episode):
@@ -744,3 +751,79 @@ def test_listing_refuses_shared_legacy_directory(
     with pytest.raises(StoreReadError, match="already used"):
         pdcst.list_all_podcasts(shows)
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_shared_legacy_directory_refuses_only_affected_selection(
+    tmp_path, monkeypatch, podcast
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    podcast.title = "Synthetic/Show"
+    podcast.directory = None
+    other = copy.deepcopy(podcast)
+    other.title = "Synthetic:Show"
+    other.feed.url = "https://example.test/other\x1b"
+    unrelated = copy.deepcopy(podcast)
+    unrelated.title = "Unrelated Show"
+    unrelated.feed.url = "https://example.test/unrelated"
+    unrelated.directory = "unrelated"
+    shows.add_list([podcast, other, unrelated])
+    (tmp_path / "synthetic_show").mkdir()
+    before = shows.path.read_bytes()
+
+    with pytest.raises(SharedDirectoryError) as raised:
+        pdcst.list_all_podcasts(shows)
+    # The exception carries no stored values; the listing stays available.
+    assert "example.test" not in str(raised.value)
+    assert {item.feed.url for item in raised.value.shared} == {
+        podcast.feed.url,
+        other.feed.url,
+    }
+    assert len(raised.value.podcasts) == 3
+
+    assert pdcst.find_podcast_by_identifier("unrelated", unique=True).title == (
+        "Unrelated Show"
+    )
+    assert pdcst.find_podcast_by_identifier("missing", unique=True) is None
+    with pytest.raises(SharedDirectoryError):
+        pdcst.find_podcast_by_identifier("synthetic/show", unique=True)
+
+    with pytest.raises(typer.BadParameter) as cli_error:
+        pdcst.list_podcasts()
+    message = str(cli_error.value)
+    assert "already used by another feed" in message
+    assert f"<{podcast.feed.url}>" in message
+    assert "<https://example.test/other\\u001b>" in message
+    assert "\x1b" not in message
+    assert shows.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("code", [errno.ENAMETOOLONG, errno.EILSEQ])
+def test_refresh_treats_impossible_retained_name_as_absent(
+    tmp_path, monkeypatch, podcast, episode, code
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_file = "saved.mp3"
+    episodes.add(episode)
+    saved = episodes.base_dir / episode.audio_file
+    saved.write_bytes(b"synthetic audio")
+
+    original_stat = EpisodeRepository._stat
+
+    def impossible_name(self, path):
+        if path == saved:
+            raise OSError(code, os.strerror(code))
+        return original_stat(self, path)
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [copy.deepcopy(episode)]
+
+    monkeypatch.setattr(EpisodeRepository, "_stat", impossible_name)
+    pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+
+    assert EpisodeRepository(episodes.base_dir).list()[0].audio_file is None
+    assert saved.read_bytes() == b"synthetic audio"

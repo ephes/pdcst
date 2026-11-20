@@ -114,7 +114,8 @@ case/Unicode-equivalent names and aliases to the same file. Episodes in the
 current feed also lose their association if the enclosure URL changed.
 Historical episodes keep their feed metadata and usable audio references.
 A permission or I/O error while checking a retained file aborts the refresh
-before either metadata store changes. Refresh leaves all physical audio entries
+before either metadata store changes; a stored name that cannot exist (too long
+or an invalid byte sequence for the filesystem) counts as missing. Refresh leaves all physical audio entries
 untouched. New episodes start undownloaded.
 A safely stored feed keeps its directory. Distinct feeds with colliding titles
 receive numbered directory suffixes. An explicit `--podcast-dir` already
@@ -183,10 +184,14 @@ using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
-Browsing refuses a legacy directory mapping when it shares a resolved directory
-with another feed under NFC normalization and case folding. Re-add one feed with
-a distinct `--podcast-dir` to resolve the conflict. The failed listing leaves
-metadata and audio untouched.
+A legacy directory mapping that shares a resolved directory with another feed
+under NFC normalization and case folding is refused: `podcasts` fails and names
+the affected feeds (escaped like other output), and `episodes`/`download` refuse
+those feeds while other subscriptions stay usable. The API raises
+`SharedDirectoryError` (a `StoreReadError` whose message contains no stored
+values; its `shared` and `podcasts` attributes hold the affected and all
+subscriptions). Re-add one feed with a distinct `--podcast-dir` to resolve the
+conflict. The refusal leaves metadata and audio untouched.
 
 Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes`
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode

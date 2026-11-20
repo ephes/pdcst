@@ -19,6 +19,7 @@ from .repository import (
     EpisodeRepository,
     FeedParserRepository,
     PodcastRepository,
+    SharedDirectoryError,
     StoreReadError,
     StoreWriteError,
 )
@@ -242,7 +243,15 @@ def _find_title(items, identifier, kind, unique):
 
 
 def find_podcast_by_identifier(identifier: str, *, unique=False) -> Podcast | None:
-    return _find_title(list_all_podcasts(), identifier, "podcast", unique)
+    try:
+        podcasts = list_all_podcasts()
+    except SharedDirectoryError as error:
+        # Refuse only a selection that maps to a shared directory.
+        podcast = _find_title(error.podcasts, identifier, "podcast", unique)
+        if any(podcast is shared for shared in error.shared):
+            raise
+        return podcast
+    return _find_title(podcasts, identifier, "podcast", unique)
 
 
 def find_episode_by_identifier(
@@ -288,6 +297,15 @@ def list_podcasts():
     """
     try:
         all_podcasts = list_all_podcasts()
+    except SharedDirectoryError as error:
+        feeds = "; ".join(
+            f"{terminal_text(podcast.title)} <{terminal_text(podcast.feed.url)}>"
+            for podcast in error.shared
+        )
+        raise typer.BadParameter(
+            f"{error}; re-add one of these feeds with a distinct --podcast-dir: "
+            f"{feeds}"
+        ) from None
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:
