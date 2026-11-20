@@ -1,5 +1,7 @@
 # Unreleased
 
+* Reuse one validated subscription catalog for refresh preflight and publication.
+
 * Validate stored download filename patterns before reading episodes.
 
 * Use the same case-insensitive podcast selection for `pdcst episodes` and

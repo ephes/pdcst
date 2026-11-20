@@ -118,7 +118,9 @@ or conflicting audio bytes. New episodes start undownloaded. A safely stored fee
 titles receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
 Directory ownership uses NFC Unicode normalization and case folding on every host.
-Subscription preflight builds one ownership index under the writer lock, resolving
+Refresh uses one validated subscription catalog under the writer lock for
+directory selection, ownership checks and the metadata update. Subscription
+preflight builds one ownership index, resolving
 each other subscription directory once; numbered suffix trials use that index.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
 feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio

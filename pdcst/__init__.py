@@ -117,7 +117,8 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
     """Acquire and publish while the caller holds the per-feed lock."""
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
     with podcasts_repo._lock():
-        subscriptions = podcasts_repo.list()
+        locked = podcasts_repo._fetch_all()
+        subscriptions = [podcasts_repo._listed_podcast(row) for row in locked.values()]
         if podcast_dir is None:
             existing = next(
                 (item for item in subscriptions if item.feed.url == feed_url), None
@@ -164,7 +165,6 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                 podcast.directory = f"{base}_{suffix}"
                 suffix += 1
         episode_dir = subscription_directory(podcast.directory)
-        locked = podcasts_repo._fetch_all()
 
         def prepare(episodes_by_guid):
             names = set()
