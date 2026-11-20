@@ -1426,10 +1426,33 @@ class PodcastRepository(JsonRepository):
         return podcast
 
     def list(self, additional_attributes=None):
-        return [
+        from . import _subscription_directory_key
+
+        podcasts = [
             self._listed_podcast(stored, additional_attributes)
             for stored in self.all.values()
         ]
+        if not any(podcast._legacy_directory for podcast in podcasts):
+            return podcasts
+
+        owners = {}
+        for podcast in podcasts:
+            try:
+                key = _subscription_directory_key(self.base_dir, podcast.directory)
+            except ValueError:
+                # Unsafe legacy paths cannot own a contained destination.
+                continue
+            owner = owners.get(key)
+            if owner is not None and (
+                owner._legacy_directory or podcast._legacy_directory
+            ):
+                raise StoreReadError(
+                    self.path,
+                    "Podcast directory is already used by another feed; "
+                    "choose a distinct --podcast-dir for one subscription",
+                )
+            owners[key] = podcast
+        return podcasts
 
     @contextmanager
     def download_subscription(self, podcast):
@@ -1438,7 +1461,11 @@ class PodcastRepository(JsonRepository):
         The directory is validated like a subscription directory, and refused
         when another feed already uses it, before any download starts.
         """
-        from . import contained_path, subscription_directory
+        from . import (
+            _subscription_directory_key,
+            contained_path,
+            subscription_directory,
+        )
 
         if not podcast._legacy_directory:
             yield podcast, None
@@ -1466,17 +1493,14 @@ class PodcastRepository(JsonRepository):
                     f"{error}; set a distinct directory in podcasts.json"
                 ) from None
 
-            def directory_key(directory):
-                return unicodedata.normalize(
-                    "NFC", str(contained_path(root, directory))
-                ).casefold()
-
-            target = directory_key(current.directory)
+            target = _subscription_directory_key(root, current.directory)
             for url, other in rows.items():
                 if url == podcast.feed.url:
                     continue
                 try:
-                    other_key = directory_key(admitted._listed_podcast(other).directory)
+                    other_key = _subscription_directory_key(
+                        root, admitted._listed_podcast(other).directory
+                    )
                 except ValueError:
                     # Unsafe legacy paths cannot own a contained destination.
                     continue

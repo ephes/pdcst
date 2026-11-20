@@ -710,3 +710,37 @@ def test_refresh_aborts_on_indeterminate_retained_audio_stat(
     assert not list(tmp_path.rglob(".pdcst-refresh-*"))
     assert episodes.list()[0].audio_file == saved.name
     assert saved.read_bytes() == b"synthetic audio"
+
+
+@pytest.mark.parametrize(
+    "other_directory,legacy_first",
+    [(None, True), ("SYNTHETIC_SHOW", True), ("SYNTHETIC_SHOW", False)],
+)
+def test_listing_refuses_shared_legacy_directory(
+    tmp_path, monkeypatch, podcast, episode, other_directory, legacy_first
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    podcast.title = "Synthetic/Show"
+    podcast.directory = None
+    other = copy.deepcopy(podcast)
+    other.title = "Synthetic:Show"
+    other.feed.url = "https://example.test/other"
+    other.directory = other_directory
+    shows.add_list([podcast, other] if legacy_first else [other, podcast])
+    episodes = EpisodeRepository(tmp_path / "synthetic_show")
+    episode.audio_file = "saved.mp3"
+    episodes.add(episode)
+    saved = episodes.base_dir / episode.audio_file
+    saved.write_bytes(b"synthetic audio")
+    before = {path: path.read_bytes() for path in (shows.path, episodes.path, saved)}
+
+    class Parser:
+        def get(self, *_):
+            return podcast, []
+
+    with pytest.raises(ValueError, match="already used"):
+        pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+    with pytest.raises(StoreReadError, match="already used"):
+        pdcst.list_all_podcasts(shows)
+    assert {path: path.read_bytes() for path in before} == before

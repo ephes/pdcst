@@ -68,6 +68,11 @@ def contained_path(root, *parts):
     return destination
 
 
+def _subscription_directory_key(root, directory):
+    """Identify directories for cross-feed ownership on every host."""
+    return unicodedata.normalize("NFC", str(contained_path(root, directory))).casefold()
+
+
 def subscription_directory(directory, root=None):
     """Contain paths and reserve every component aliasing control storage."""
     root = Path(settings.root if root is None else root).resolve()
@@ -135,23 +140,18 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                     if legacy_path.is_dir():
                         podcast.directory = legacy
 
-        def directory_key(directory):
-            return unicodedata.normalize(
-                "NFC", str(contained_path(settings.root, directory))
-            ).casefold()
-
         owners = set()
         for item in subscriptions:
             if item.feed.url == feed_url:
                 continue
             try:
-                owners.add(directory_key(item.directory))
+                owners.add(_subscription_directory_key(settings.root, item.directory))
             except ValueError:
                 # Unsafe legacy paths cannot own a contained destination.
                 continue
 
         def owned(directory):
-            return directory_key(directory) in owners
+            return _subscription_directory_key(settings.root, directory) in owners
 
         if owned(podcast.directory):
             if podcast_dir is not None or existing is not None:

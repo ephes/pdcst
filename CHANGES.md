@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse to list legacy subscriptions whose derived directory collides with
+  another feed's directory after normalization.
+
 * Retry incomplete or changed-generation metadata reads once under the owner
   lock when a publication marker is observed.
 

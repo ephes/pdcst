@@ -183,6 +183,10 @@ using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
+Browsing refuses a legacy directory mapping when it shares a resolved directory
+with another feed under NFC normalization and case folding. Re-add one feed with
+a distinct `--podcast-dir` to resolve the conflict. The failed listing leaves
+metadata and audio untouched.
 
 Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes`
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
