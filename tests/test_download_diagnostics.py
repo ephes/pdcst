@@ -2,6 +2,7 @@
 
 import importlib
 import traceback
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx
@@ -131,3 +132,79 @@ def test_transport_api_exception_chain_omits_private_values(tmp_path, monkeypatc
     assert "QUERY_SECRET" not in rendered
     assert "Private failure" not in rendered
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("case", ["interrupted", "replacement", "eof", "published"])
+def test_response_close_failure_preserves_transfer_outcome(
+    tmp_path, monkeypatch, caplog, case
+):
+    module = importlib.import_module("pdcst.download")
+    target = tmp_path / "audio.mp3"
+    target.write_bytes(b"old audio")
+    close_failures = []
+
+    def fail_close():
+        close_failures.append(target.read_bytes())
+        raise httpx.CloseError(f"Private close failure: {URL}")
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"complete"
+            if case == "interrupted":
+                raise httpx.ReadTimeout(f"Private read failure: {URL}")
+
+        def close(self):
+            if case != "published":
+                fail_close()
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, stream=Stream())
+            ),
+            **kw,
+        ),
+    )
+    if case == "published":
+        close = httpx.Response.close
+
+        def close_after_publication(response):
+            if response.is_closed:
+                fail_close()
+            close(response)
+
+        monkeypatch.setattr(httpx.Response, "close", close_after_publication)
+
+    if case == "replacement":
+        replacement_file = module.replacement_file
+
+        @contextmanager
+        def fail_replacement(*args, **kwargs):
+            with replacement_file(*args, **kwargs) as output:
+                yield output
+                raise OSError("synthetic replacement failure")
+
+        monkeypatch.setattr(module, "replacement_file", fail_replacement)
+
+    if case == "interrupted":
+        with pytest.raises(
+            module.DownloadError, match="Unable to fetch audio"
+        ) as error:
+            module.download_with_progress(URL, target)
+        assert isinstance(error.value.__context__, httpx.ReadTimeout)
+        assert "QUERY_SECRET" not in "".join(traceback.format_exception(error.value))
+    elif case == "replacement":
+        with pytest.raises(OSError, match="synthetic replacement failure"):
+            module.download_with_progress(URL, target)
+    else:
+        assert module.download_with_progress(URL, target) == target
+
+    assert close_failures == [b"complete" if case == "published" else b"old audio"]
+    succeeded = case in {"eof", "published"}
+    assert target.read_bytes() == (b"complete" if succeeded else b"old audio")
+    assert list(tmp_path.iterdir()) == [target]
+    assert ("Audio transferred; response close failed" in caplog.text) == succeeded
+    assert "QUERY_SECRET" not in caplog.text

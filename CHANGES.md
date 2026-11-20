@@ -1,5 +1,8 @@
 # Unreleased
 
+* Preserve transfer and replacement errors when closing an audio response also
+  fails. Report a close failure as a warning after successful audio output.
+
 * Skip filesystem lookups for stored audio associations with unrelated filenames
   during download ownership checks.
 

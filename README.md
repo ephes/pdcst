@@ -426,6 +426,9 @@ CLI download failures report a concise nonzero error without private URL userinf
 or fragment values, or transport exception chains. HTTP failures include only
 their status code. Transfer failures preserve previous audio and download metadata,
 and remove only this download's temporary file.
+Response-close failures leave an earlier transfer or replacement error intact.
+When audio output has been published successfully, a response-close failure is
+logged as a warning without response or URL details, and the transfer succeeds.
 Missing or malformed Content-Length (including non-ASCII digits) uses
 indeterminate progress. ASCII decimal lengths are compared to the byte budget
 before integer conversion, ignoring leading zeros; arbitrarily large declared
