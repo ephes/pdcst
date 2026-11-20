@@ -2,6 +2,8 @@
 
 import json
 import os
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +55,25 @@ def test_read_generation(tmp_path, monkeypatch, episode, replacement, operation)
             with pytest.raises(StoreReadError, match="generation changed"):
                 repo.list() if operation == "list" else repo.add(episode)
     assert repo.path.read_bytes() == changed
+
+
+def test_short_metadata_read_refuses_valid_json_prefix(tmp_path, monkeypatch):
+    repo = EpisodeRepository(tmp_path)
+    original = b"[]\n"
+    repo.path.write_bytes(original)
+    real_fdopen = os.fdopen
+
+    @contextmanager
+    def short_read(descriptor, *args, **kwargs):
+        with real_fdopen(descriptor, *args, **kwargs) as source:
+            yield SimpleNamespace(
+                fileno=source.fileno, read=lambda limit: source.read(min(limit, 2))
+            )
+
+    monkeypatch.setattr(repository.os, "fdopen", short_read)
+    with pytest.raises(StoreReadError, match="incomplete read"):
+        repo.list()
+    assert repo.path.read_bytes() == original
 
 
 @pytest.mark.parametrize("value", [True, False, 1.5, -1, 0, "1"])

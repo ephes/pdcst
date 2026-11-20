@@ -1,5 +1,17 @@
 # Unreleased
 
+* Preserve the original replacement failure if removing the stage also fails,
+  and skip stage removal once its name has been consumed by replacement.
+
+* Refuse metadata reads whose byte count differs from the admitted file size,
+  even when the bytes form valid JSON.
+
+* Fold each title once when looking for a unique match, and stop at the first
+  substring match when uniqueness is not required.
+
+* Release the subscription lock before transfer when a legacy download reloads
+  a directory already saved by another command.
+
 * Reject empty or non-string feed URLs, episode GUIDs and enclosure URLs in
   stored metadata before refreshing either store.
 

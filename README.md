@@ -212,12 +212,16 @@ Downloads require a unique match for both titles; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact
 title or a more specific substring; duplicate exact titles must first be corrected
-in the metadata. Browsing retains its first-substring-match behavior.
+in the metadata. Download selection counts matches and checks for exact titles
+in one pass. Browsing stops matching at the first substring match.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
 The first successful download for a legacy subscription saves the selected
 directory in `podcasts.json`. It holds the subscription lock from directory
-selection through publication. A selected directory that is reserved for
+selection through publication while the directory still needs to be saved. If
+another command saves a directory before the download reloads the subscription,
+the download uses that directory and releases the subscription lock before
+transfer. A directory selected for migration that is reserved for
 repository storage or already used by another feed is refused before any
 transfer starts; set a distinct directory in `podcasts.json` instead. Later
 commands use the saved directory even if the other directory appears. If audio is saved but updating the subscription
@@ -417,11 +421,12 @@ changes the process umask. The containing directory is then synced
 before success. Failures before replacement retain the previous file and do not
 mark an episode downloaded. Filesystem errors propagate to the caller.
 The replacement helper closes its descriptor even if opening the stream fails;
-flush, permission-copy, file-sync, close or rename failures remove only its owned
-temporary file and preserve the destination. A directory-sync failure or interruption after a
-successful replacement raises `pdcst.storage.PublicationDurabilityError`
-(`OSError`): the new
-file is already visible, but its durability across power loss is uncertain.
+flush, permission-copy, file-sync, close or rename failures preserve the
+destination. Cleanup attempts to remove only the owned temporary file, and an
+unlink error leaves the original failure in place. A successful replacement
+consumes the temporary name. A subsequent directory-sync failure or
+interruption raises `pdcst.storage.PublicationDurabilityError` (`OSError`).
+The new file is already visible, but its durability across power loss is uncertain.
 The CLI reports that state without raw filesystem exception details. Unrelated
 temporary files remain.
 
@@ -586,7 +591,8 @@ refresh never takes the download claim lock. Failed refreshes release the lock
 and can be retried. Do not remove `.feed-locks/` files while commands are running.
 
 Metadata reads compare the opened descriptor's device/inode, size and nanosecond
-modification/change timestamps after the bounded read. In-place rewrites are
+modification/change timestamps after the bounded read. The byte count must
+match the admitted size before JSON parsing. In-place rewrites are
 refused as a changed generation, including same-size rewrites. Atomic replacement
 can still return the coherent old descriptor (unlink-only change timestamps do
 not invalidate unchanged bytes). Retry after an external writer finishes.

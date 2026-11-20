@@ -222,3 +222,80 @@ def test_legacy_pin_identity_change_reports_saved_audio(
         tmp_path / "synthetic_show_" / "saved.mp3"
     ).read_bytes() == b"synthetic audio"
     assert shows.path.read_bytes() == original
+
+
+def test_concurrently_pinned_directory_releases_subscription_lock(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst.models import Feed, Podcast
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    monkeypatch.setattr(pdcst.settings, "lock_wait_seconds", 0.1)
+    podcast.directory = None
+    podcast.file_name_pattern = "saved.mp3"
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    pinned = tmp_path / "concurrently-pinned"
+    EpisodeRepository(pinned).add(episode)
+    find_podcast = pdcst.find_podcast_by_identifier
+
+    def select_then_pin(*args, **kwargs):
+        selected = find_podcast(*args, **kwargs)
+        assert selected._legacy_directory
+        podcast.directory = pinned.name
+        shows.add(podcast)
+        return selected
+
+    other = Podcast(
+        feed=Feed(url="https://example.test/other.xml", updated=podcast.feed.updated),
+        title="Other Show",
+        directory="other_show",
+        episodes_count=1,
+    )
+
+    def transfer(url, stage, **kwargs):
+        assert stage.parent == pinned.resolve()
+        # Complete another writer's lock acquisition while the transfer is open.
+        shows.add(other)
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", select_then_pin)
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    pdcst.download("python", "refactor")
+    assert shows.all[other.feed.url].directory == other.directory
+    assert shows.all[podcast.feed.url].directory == pinned.name
+    assert (pinned / "saved.mp3").read_bytes() == b"synthetic audio"
+
+
+@pytest.mark.parametrize(
+    ("unique", "identifier", "expected_index", "match_count"),
+    [
+        (True, "STRASSE", 20, None),
+        (True, "str", None, 41),
+        (False, "STRASSE", 0, None),
+    ],
+)
+def test_episode_selection_folds_each_visited_title_once(
+    monkeypatch, podcast, unique, identifier, expected_index, match_count
+):
+    from types import SimpleNamespace
+
+    visited = []
+
+    class Title(str):
+        def casefold(self):
+            visited.append(self)
+            return super().casefold()
+
+    titles = [Title(f"Straße {index}") for index in range(41)]
+    titles[20] = Title("Straße")
+    episodes = [SimpleNamespace(title=title) for title in titles]
+    monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: episodes)
+
+    if match_count is None:
+        selected = pdcst.find_episode_by_identifier(podcast, identifier, unique=unique)
+        assert selected is episodes[expected_index]
+    else:
+        with pytest.raises(pdcst.SelectionError, match=rf"\({match_count} matches\)"):
+            pdcst.find_episode_by_identifier(podcast, identifier, unique=unique)
+    assert visited == (titles if unique else titles[:1])
