@@ -143,10 +143,12 @@ def browsing_store(tmp_path):
     root = tmp_path / "subscriptions"
     root.mkdir()
     amber = make_podcast("Amber Observatory", "amber-store", 2)
+    archive = make_podcast("Amber Observatory Archive", "archive-store", 1)
     birch = make_podcast("Birch Workshop", "birch-store", 1)
     empty = make_podcast("Empty Studio", "empty-store", 0)
-    PodcastRepository(root).add_list([amber, birch, empty])
+    PodcastRepository(root).add_list([archive, amber, birch, empty])
     for podcast, titles in [
+        (archive, ["From the Archive"]),
         (amber, ["First Light", "Second Orbit"]),
         (birch, ["Carving a Spoon"]),
         (empty, []),
@@ -170,7 +172,18 @@ def browsing_store(tmp_path):
 @pytest.mark.parametrize(
     "identifier,directory,podcast,titles",
     [
-        ("aMbEr", "amber-store", "Amber Observatory", ["First Light", "Second Orbit"]),
+        (
+            "aMbEr ObSeRvAtOrY",
+            "amber-store",
+            "Amber Observatory",
+            ["First Light", "Second Orbit"],
+        ),
+        (
+            "archive",
+            "archive-store",
+            "Amber Observatory Archive",
+            ["From the Archive"],
+        ),
         ("WORK", "birch-store", "Birch Workshop", ["Carving a Spoon"]),
         ("eMpTy", "empty-store", "Empty Studio", []),
     ],
@@ -200,4 +213,14 @@ def test_episodes_empty_store_reports_error(tmp_path):
     root.mkdir()
     result = run_browse(root, ["episodes", "amber"], exit_code=2)
     assert "No matching podcast" in result["output"]
+    assert result["opened"] == result["episodes"] == []
+
+
+@pytest.mark.parametrize(
+    "identifier,message", [("amber", "Ambiguous podcast"), (" ", "Empty podcast")]
+)
+def test_episodes_refuses_nonunique_title(browsing_store, identifier, message):
+    result = run_browse(browsing_store, ["episodes", identifier], exit_code=2)
+    assert message in result["output"]
+    assert "Traceback" not in result["output"]
     assert result["opened"] == result["episodes"] == []

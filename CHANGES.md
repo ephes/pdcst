@@ -1,5 +1,8 @@
 # Unreleased
 
+* Use the same case-insensitive podcast selection for `pdcst episodes` and
+  `pdcst download`, preferring an exact title and refusing ambiguous matches.
+
 * Report a missing podcast as a CLI error from `pdcst episodes`. An existing
   subscription with no episodes still succeeds with empty output.
 
