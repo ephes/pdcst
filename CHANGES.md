@@ -1,5 +1,8 @@
 # Unreleased
 
+* Accept complete audio destination scans at the exact entry cap, including
+  the publication recheck.
+
 * Report uncertain durability after direct audio replacement and keep stage-sync
   failures classified as download errors for repository-owned transfers.
 

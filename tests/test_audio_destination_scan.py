@@ -71,7 +71,7 @@ def test_incomplete_scan_refuses_before_transfer_and_releases_locks(
             DownloadConflict, match="ownership scan incomplete.*narrow.*retry"
         ):
             repo.download_episode(episode, "saved.mp3", unexpected_transfer)
-    assert len(consumed) == (2 if limit == "time" else 4)
+    assert len(consumed) == (2 if limit == "time" else 5)
     assert closed == [True]
     assert not calls
     assert repo.path.read_bytes() == before
@@ -129,8 +129,8 @@ def test_admission_and_publication_share_scan_budget(
             DownloadConflict, match="ownership scan incomplete.*retained at"
         ):
             repo.download_episode(episode, "saved.mp3", slow_transfer)
-    # Admission: 2 entries. Recheck: the remaining 3 (time) or 4 (entries).
-    assert len(consumed) == (5 if limit == "time" else 6)
+    # Admission: 2 entries. Recheck: 3 before expiry or 4 plus the sentinel.
+    assert len(consumed) == (5 if limit == "time" else 7)
     assert calls == [True]
     assert repo.path.read_bytes() == before
     assert not (repo.base_dir / "saved.mp3").exists()
@@ -177,10 +177,77 @@ def test_admission_reserves_budget_for_publication_recheck(
         patch.setattr(repository.EpisodeRepository, "_directory_entries", entries)
         with pytest.raises(DownloadConflict, match="ownership scan incomplete"):
             repo.download_episode(episode, "saved.mp3", unexpected_transfer)
-    assert len(consumed) == (4 if limit == "time" else 5)
+    assert len(consumed) == (4 if limit == "time" else 6)
     assert not calls
     assert repo.path.read_bytes() == before
     assert not list(repo.base_dir.glob(".pdcst-download-*"))
+
+
+@pytest.mark.parametrize("overflow_at", [None, "admission", "publication"])
+def test_destination_scan_checks_eof_at_entry_cap(
+    unowned_store, episode, monkeypatch, overflow_at
+):
+    repo = unowned_store
+    previous = repo.path.read_bytes()
+    scans = []
+    sentinels = []
+
+    @contextmanager
+    def entries(self):
+        phase = "admission" if not scans else "publication"
+        scans.append(phase)
+
+        def rows():
+            for index in range(3):
+                yield SimpleNamespace(name=f"unrelated-{index}")
+            sentinels.append(phase)
+            if phase == overflow_at:
+                # This object has no name and must never reach normalization.
+                yield object()
+
+        yield rows()
+
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 6)
+    monkeypatch.setattr(repository.EpisodeRepository, "_directory_entries", entries)
+    if overflow_at is None:
+        target = repo.download_episode(episode, "saved.mp3", transfer)
+        assert target.read_bytes() == b"completed audio"
+        assert repo.all[episode.guid].audio_file == target.name
+    else:
+        with pytest.raises(DownloadConflict, match="ownership scan incomplete"):
+            repo.download_episode(episode, "saved.mp3", transfer)
+        assert repo.path.read_bytes() == previous
+        assert not (repo.base_dir / "saved.mp3").exists()
+        stages = list(repo.base_dir.glob(".pdcst-download-*"))
+        assert [stage.read_bytes() for stage in stages] == (
+            [b"completed audio"] if overflow_at == "publication" else []
+        )
+    expected = ["admission"]
+    if overflow_at != "admission":
+        expected.append("publication")
+    assert sentinels == scans == expected
+
+
+def test_destination_scan_checks_deadline_after_sentinel_eof(
+    unowned_store, episode, monkeypatch
+):
+    clock = [0.0]
+
+    @contextmanager
+    def entries(self):
+        def rows():
+            yield SimpleNamespace(name="unrelated")
+            clock[0] = 1.0
+
+        yield rows()
+
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_ENTRIES", 2)
+    monkeypatch.setattr(repository, "AUDIO_DESTINATION_SCAN_MAX_SECONDS", 2.0)
+    monkeypatch.setattr(repository.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(repository.EpisodeRepository, "_directory_entries", entries)
+    with pytest.raises(DownloadConflict, match="ownership scan incomplete"):
+        unowned_store.download_episode(episode, "saved.mp3", transfer)
+    assert clock[0] == 1.0
 
 
 def test_alias_match_at_last_allowed_entry_is_still_unowned(

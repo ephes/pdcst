@@ -58,8 +58,8 @@ def _audio_size_admitted(info):
 class _DestinationScanBudget:
     entries: int
     seconds: float
-    # Admission may use at most half, so the mandatory publication recheck of
-    # the same directory (plus its stage) still fits the remaining budget.
+    # Reserve at least half for the mandatory publication recheck, which also
+    # sees the transfer stage.
     reserve_recheck: bool = False
 
 
@@ -858,13 +858,15 @@ class EpisodeRepository(JsonRepository):
             with self._directory_entries() as entries:
                 while True:
                     check_time()
-                    if consumed >= entries_left:
-                        refuse()
                     try:
                         entry = next(entries)
                     except StopIteration:
                         check_time()
                         return False
+                    check_time()
+                    # At the cap, this entry serves only as an overflow sentinel.
+                    if consumed >= entries_left:
+                        refuse()
                     consumed += 1
                     entry_key = unicodedata.normalize("NFC", entry.name).casefold()
                     check_time()
