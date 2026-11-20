@@ -167,9 +167,12 @@ HTTP Last-Modified remains a date fallback.
 ## Browse subscriptions
 
 `pdcst podcasts` lists stored subscriptions with their episode counts.
-`pdcst episodes amber` lists episode titles for the first subscription whose
-title contains `amber`, ignoring case. An empty store, an empty show or an
-unmatched show produces no output and succeeds. Both commands read local
+`pdcst episodes amber` uses the same case-insensitive podcast selection as
+`download`: it prefers a unique exact title and otherwise requires a unique
+substring. Blank or ambiguous identifiers exit with status 2. An unmatched
+title, including when the store is empty, also exits with status 2 and reports
+`No matching podcast`. A matching subscription with no episodes succeeds with
+no output. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next
@@ -382,11 +385,15 @@ Redirect responses are closed without reading their bodies. Relative locations,
 cookies and authorization headers follow HTTPX's redirect rules. All hops and
 the final body share one elapsed deadline; only the final body is retained and
 counted against the audio byte limit.
+Audio progress updates are spaced at least a tenth of a second apart during
+streaming. At the end of the stream the display receives the exact byte count.
 Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
 elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
 must be finite. Larger episodes can use higher limits. Declared lengths over the
-byte limit are rejected before creating output; each raw chunk is checked before
-writing, and elapsed time is checked again before publication. HTTP operations
+byte limit are rejected before creating output. The elapsed deadline is checked
+after staging opens and again after progress setup, before reading the body.
+Each raw chunk is checked before writing, and elapsed time is checked again
+before publication. HTTP operations
 time out after at most 10 seconds (or the remaining elapsed budget if smaller), so a
 blocked operation may finish its timeout before the elapsed limit is checked.
 The transfer helper `download_with_progress` raises `DownloadError` (a `ValueError`)

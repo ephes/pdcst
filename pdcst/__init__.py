@@ -209,7 +209,7 @@ def list_all_episodes(podcast) -> list[Episode]:
 
 
 class SelectionError(ValueError):
-    """A download title does not select one item."""
+    """A title identifier is blank or ambiguous."""
 
 
 def _find_title(items, identifier, kind, unique):
@@ -302,11 +302,11 @@ def list_episodes(identifier: str):
     pdcst episodes python
     """
     try:
-        podcast = find_podcast_by_identifier(identifier)
+        podcast = find_podcast_by_identifier(identifier, unique=True)
         if podcast is None:
-            return
+            raise typer.BadParameter("No matching podcast")
         episodes = list_all_episodes(podcast)
-    except (DuplicateIdentity, StoreReadError) as error:
+    except (DuplicateIdentity, SelectionError, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for episode in episodes:
         print(terminal_text(episode))

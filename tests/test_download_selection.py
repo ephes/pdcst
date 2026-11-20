@@ -64,7 +64,7 @@ def test_ambiguous_downloads_never_mutate(tmp_path, monkeypatch, podcast, episod
         assert result.exit_code != 0
         assert message in result.output
         assert not list(tmp_path.iterdir())
-    # Browse retains its first-match contract.
+    # The library helper defaults to the first match.
     assert pdcst.find_podcast_by_identifier("python") == podcast
 
 

@@ -1,5 +1,17 @@
 # Unreleased
 
+* Use the same case-insensitive podcast selection for `pdcst episodes` and
+  `pdcst download`, preferring an exact title and refusing ambiguous matches.
+
+* Report a missing podcast as a CLI error from `pdcst episodes`. An existing
+  subscription with no episodes still succeeds with empty output.
+
+* Check the audio deadline after opening the stage and setting up progress,
+  before reading any response body bytes.
+
+* Coalesce audio progress updates during streaming and display the exact byte
+  count at the end of the stream.
+
 * Preserve the original replacement failure if removing the stage also fails,
   and skip stage removal once its name has been consumed by replacement.
 

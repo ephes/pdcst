@@ -1,4 +1,5 @@
 import importlib
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx
@@ -11,7 +12,45 @@ from pdcst.config import Settings
 from pdcst.repository import EpisodeRepository
 
 
-@pytest.mark.parametrize("case", ["declared", "chunked", "trickle", "headers", "eof"])
+def test_fragmented_audio_coalesces_progress(tmp_path, monkeypatch):
+    module = importlib.import_module("pdcst.download")
+    clock = [0.0]
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+    updates = []
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for index in range(1001):
+                if index in {499, 999}:
+                    clock[0] += 0.2
+                yield b"x"
+
+    def record_progress(self, task, *, completed):
+        updates.append(completed)
+
+    monkeypatch.setattr(module.rich.progress.Progress, "update", record_progress)
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, stream=Stream())
+            ),
+            **kw,
+        ),
+    )
+    target = tmp_path / "audio.mp3"
+
+    module.download_with_progress("https://example.invalid/audio", target)
+
+    assert target.read_bytes() == b"x" * 1001
+    assert updates == [500, 1000, 1001]
+
+
+@pytest.mark.parametrize(
+    "case", ["declared", "chunked", "trickle", "headers", "staging", "progress", "eof"]
+)
 def test_audio_budget_preserves_audio_and_metadata(
     tmp_path, monkeypatch, podcast, episode, case
 ):
@@ -25,6 +64,25 @@ def test_audio_budget_preserves_audio_and_metadata(
     )
     clock = [0]
     monkeypatch.setattr(module, "monotonic", lambda: clock[0], raising=False)
+    if case == "staging":
+        original_replacement = module.replacement_file
+
+        @contextmanager
+        def slow_replacement(*args, **kwargs):
+            with original_replacement(*args, **kwargs) as output:
+                clock[0] = 6
+                yield output
+
+        monkeypatch.setattr(module, "replacement_file", slow_replacement)
+    if case == "progress":
+        original_add_task = module.rich.progress.Progress.add_task
+
+        def slow_add_task(self, *args, **kwargs):
+            task = original_add_task(self, *args, **kwargs)
+            clock[0] = 6
+            return task
+
+        monkeypatch.setattr(module.rich.progress.Progress, "add_task", slow_add_task)
     monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
     monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
     repo = EpisodeRepository(tmp_path / podcast.directory)
@@ -74,7 +132,7 @@ def test_audio_budget_preserves_audio_and_metadata(
     assert episode.audio_file == target.name
     assert not list(tmp_path.rglob("*.tmp"))
     assert stream.closed
-    if case in {"declared", "headers"}:
+    if case in {"declared", "headers", "staging", "progress"}:
         assert stream.consumed == 0
 
 
