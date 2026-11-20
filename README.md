@@ -105,17 +105,17 @@ strings. Their exact spelling is preserved. A malformed identity reports an
 invalid schema (`StoreReadError`) and leaves both metadata stores unchanged
 during refresh.
 
-Repeated subscriptions refresh feed metadata and keep existing download associations
-only when the enclosure URL is unchanged and the stored filename still refers
-to a contained regular file. Subscription refresh checks the filename relative
-to the held episode directory with a single filesystem lookup that leaves
-symlinks unresolved. Each association must have a single owner among stored
-episodes. Refresh refuses case/Unicode-equivalent filenames and aliases to
-the same file. A conflicting association is cleared for each
-refreshed episode; unrelated records stay unchanged. Symlink loops, missing files
-and repository/recovery filenames are also unusable. Refresh never deletes linked
-or conflicting audio bytes. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
-titles receive numbered directory suffixes. An explicit `--podcast-dir` already
+Repeated subscriptions refresh feed metadata and check download associations
+for every retained episode, including those outside the current feed window.
+Refresh looks up each filename relative to the held episode directory without
+following symlinks. It clears associations to missing or nonregular files,
+repository/recovery names, and files with ambiguous ownership, including
+case/Unicode-equivalent names and aliases to the same file. Episodes in the
+current feed also lose their association if the enclosure URL changed.
+Historical episodes keep their feed metadata and usable audio references.
+Refresh leaves all physical audio entries untouched. New episodes start undownloaded.
+A safely stored feed keeps its directory. Distinct feeds with colliding titles
+receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
 Directory ownership uses NFC Unicode normalization and case folding on every host.
 Refresh uses one validated subscription catalog under the writer lock for

@@ -1141,6 +1141,7 @@ class EpisodeRepository(JsonRepository):
             locked.values(),
             key=lambda row: (row.index, row.pk not in usable, row.published, row.pk),
         ):
+            row.audio_file = usable.get(row.pk)
             if row.index in seen:
                 row.index = next_index
                 next_index += 1
@@ -1156,7 +1157,7 @@ class EpisodeRepository(JsonRepository):
                 next_index += 1
             model.audio_file = None
             if previous and previous.audio_url == model.audio_url:
-                model.audio_file = usable.get(model.pk)
+                model.audio_file = previous.audio_file
             locked[model.pk] = model
         return dict(sorted(locked.items(), key=lambda item: (item[1].index, item[0])))
 
