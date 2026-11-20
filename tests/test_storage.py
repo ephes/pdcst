@@ -308,3 +308,38 @@ def test_stage_cleanup_preserves_publication_result(
         assert not unlinks
         assert not list(tmp_path.glob(".*.tmp"))
         assert target.read_text() == "new"
+
+
+@pytest.mark.parametrize("primary_failure", [None, "producer", "fsync"])
+def test_descriptor_close_failure_preserves_primary_error(
+    tmp_path, monkeypatch, primary_failure
+):
+    target = tmp_path / "episodes.json"
+    target.write_bytes(b"[]")
+    close_error = OSError(errno.EIO, "synthetic close failure")
+    primary_error = OSError(errno.ENOSPC, "synthetic publication failure")
+    original_close = storage.os.close
+    closed = []
+
+    def fail_close(descriptor):
+        original_close(descriptor)
+        closed.append(descriptor)
+        raise close_error
+
+    def fail_fsync(descriptor):
+        raise primary_error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage.os, "close", fail_close)
+        if primary_failure == "fsync":
+            patch.setattr(storage.os, "fsync", fail_fsync)
+        with pytest.raises(OSError) as raised:
+            with storage.replacement_file(target, binary=True) as output:
+                output.write(b'[{"synthetic": true}]')
+                if primary_failure == "producer":
+                    raise primary_error
+
+    assert raised.value is (primary_error if primary_failure else close_error)
+    assert len(closed) == 1
+    assert target.read_bytes() == b"[]"
+    assert set(tmp_path.iterdir()) == {target}

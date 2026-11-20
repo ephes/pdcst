@@ -550,7 +550,10 @@ or increase the limit for intentionally long operations. Already held locks
 remain held for their operation; the limit bounds waiting, not operation time.
 Do not remove any lock file while commands are running. Failed serialization
 or writes before replacement leave the previous JSON intact; leftover temporary files after a killed process
-can be removed when no commands are running. Metadata reads require a regular
+can be removed when no commands are running. If the staging descriptor fails
+to close, publication stops before replacement. An earlier staging error
+remains the reported failure if descriptor close also fails.
+Metadata reads require a regular
 UTF-8 JSON file of at most 16 MiB (including
 files that grow during the read). Writes enforce the same encoded byte ceiling
 before replacement; oversized batches raise `StoreWriteError` (`ValueError`)

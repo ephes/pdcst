@@ -1,5 +1,8 @@
 # Unreleased
 
+* Preserve the original staging error when closing the staging descriptor also
+  fails. A standalone close failure stops publication before replacement.
+
 * Abort refresh on permission or I/O errors checking retained audio, preserving
   both catalogs and their existing download associations.
 
