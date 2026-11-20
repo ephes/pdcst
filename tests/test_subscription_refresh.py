@@ -390,7 +390,7 @@ def test_refresh_drops_shared_audio_ownership(tmp_path, episode, refresh_both):
     repo.import_list(incoming)
     saved = repo.all
     assert saved[episode.guid].audio_file is None
-    assert saved[other.guid].audio_file == (None if refresh_both else target.name)
+    assert saved[other.guid].audio_file is None
     assert target.read_bytes() == b"synthetic audio"
 
 
@@ -593,3 +593,82 @@ def test_refresh_recovery_metadata_never_becomes_audio(tmp_path, episode, suffix
     repo.import_list([episode])
     assert repo.list()[0].audio_file is None
     assert recovery.read_bytes() == b"retained metadata generation"
+
+
+def test_refresh_validates_one_locked_subscription_generation(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst import repository
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    podcast.title = "Synthetic Show!"
+    podcast.directory = None
+    shows.add(podcast)
+    legacy = tmp_path / "synthetic_show!"
+    legacy.mkdir()
+    counts = {"read": 0, "validate": 0}
+    read = PodcastRepository._read_bytes
+    parse = repository.parse_obj_as
+
+    def count_read(self):
+        assert self._lock_depth == 1
+        counts["read"] += 1
+        return read(self)
+
+    def count_parse(model_type, values):
+        if model_type == list[shows.storage_model_type]:
+            counts["validate"] += 1
+        return parse(model_type, values)
+
+    class Parser:
+        def get(self, *_):
+            fresh = copy.deepcopy(podcast)
+            fresh.title = "Renamed Synthetic Show"
+            return fresh, [episode]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PodcastRepository, "_read_bytes", count_read)
+        patch.setattr(repository, "parse_obj_as", count_parse)
+        refreshed = pdcst.subscribe(
+            podcast.feed.url, "{index}.mp3", None, Parser(), shows
+        )
+
+    # The second raw read copies the original bytes into the recovery backup.
+    assert counts == {"read": 2, "validate": 1}
+    assert shows.all[podcast.feed.url].directory == refreshed.directory == legacy.name
+    assert EpisodeRepository(legacy).list()[0].guid == episode.guid
+
+
+def test_refresh_reconciles_audio_for_episodes_outside_feed_window(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    missing = copy.deepcopy(episode)
+    missing.guid = "expired-missing"
+    missing.audio_file = "gone.mp3"
+    valid = copy.deepcopy(episode)
+    valid.guid = "expired-valid"
+    valid.index = missing.index + 1
+    valid.audio_file = "saved.mp3"
+    episode.index = valid.index + 1
+    episodes.add_list([missing, valid, episode])
+    audio = episodes.base_dir / valid.audio_file
+    audio.write_bytes(b"synthetic audio")
+    before = episodes.all
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [episode]
+
+    result = pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+
+    after = episodes.all
+    assert result.episodes_count == len(after) == 3
+    expected_missing = before[missing.guid].dict() | {"audio_file": None}
+    assert after[missing.guid].dict() == expected_missing
+    assert after[valid.guid].dict() == before[valid.guid].dict()
+    assert audio.read_bytes() == b"synthetic audio"

@@ -9,6 +9,10 @@ from urllib.parse import urlsplit
 
 FILENAME_MAX_BYTES = 255
 FILENAME_PATTERN_MAX_CHARS = 4096
+FILENAME_PATTERN_ERROR = (
+    "Invalid filename pattern: use index, title and file_format; "
+    "decimal width/precision and filename bytes must be at most 255"
+)
 # Standard format-spec syntax with bounded numbers (each at most 255, checked
 # separately): optional fill+alignment, then for the integer index sign,
 # "#", zero padding, width, grouping and an integer type (no "c", which could
@@ -129,6 +133,40 @@ class Podcast:
         equal = self.feed == other.feed and self.title == other.title
         return equal
 
+    def _filename_pattern_parts(self):
+        if len(self.file_name_pattern) > FILENAME_PATTERN_MAX_CHARS:
+            raise FilenamePatternError(
+                "Invalid filename pattern: patterns are limited to 4096 characters"
+            )
+        try:
+            parts = list(Formatter().parse(self.file_name_pattern))
+            for _, field, spec, conversion in parts:
+                if field is None:
+                    continue
+                grammar = INDEX_SPEC if field == "index" else TEXT_SPEC
+                if (
+                    field not in {"index", "title", "file_format"}
+                    or conversion is not None
+                    or re.fullmatch(grammar, spec) is None
+                    or any(
+                        int(n) > FILENAME_MAX_BYTES for n in re.findall(r"[0-9]+", spec)
+                    )
+                ):
+                    raise ValueError
+            return parts
+        except ValueError:
+            raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
+
+    def validate_audio_filename_pattern(self):
+        """Admit filename format syntax without loading an episode."""
+        parts = self._filename_pattern_parts()
+        try:
+            for _, field, spec, _ in parts:
+                if field is not None:
+                    format(1 if field == "index" else "x", spec)
+        except ValueError:
+            raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
+
     def get_audio_file_name(self, episode):
         """
         Use the file_name_pattern to build a name for episodes audio files.
@@ -149,25 +187,8 @@ class Podcast:
             "index": episode.index,
             "title": self.title_for_filename(episode.title),
         }
-        if len(self.file_name_pattern) > FILENAME_PATTERN_MAX_CHARS:
-            raise FilenamePatternError(
-                "Invalid filename pattern: patterns are limited to 4096 characters"
-            )
+        parts = self._filename_pattern_parts()
         try:
-            parts = list(Formatter().parse(self.file_name_pattern))
-            for _, field, spec, conversion in parts:
-                if field is None:
-                    continue
-                grammar = INDEX_SPEC if field == "index" else TEXT_SPEC
-                if (
-                    field not in details
-                    or conversion is not None
-                    or re.fullmatch(grammar, spec) is None
-                    or any(
-                        int(n) > FILENAME_MAX_BYTES for n in re.findall(r"[0-9]+", spec)
-                    )
-                ):
-                    raise ValueError
             chunks = []
             size = 0
             for literal, field, spec, _ in parts:
@@ -185,10 +206,7 @@ class Podcast:
             AttributeError,
             OverflowError,
         ):
-            raise FilenamePatternError(
-                "Invalid filename pattern: use index, title and file_format; "
-                "decimal width/precision and filename bytes must be at most 255"
-            ) from None
+            raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
         if (
             not name
             or name in {".", ".."}

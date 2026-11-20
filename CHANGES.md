@@ -1,5 +1,13 @@
 # Unreleased
 
+* Clear unusable audio references for episodes outside the refreshed feed window.
+
+* Use a single no-follow lookup per file during download ownership checks.
+
+* Reuse one validated subscription catalog for refresh preflight and publication.
+
+* Validate stored download filename patterns before reading episodes.
+
 * Use the same case-insensitive podcast selection for `pdcst episodes` and
   `pdcst download`, preferring an exact title and refusing ambiguous matches.
 

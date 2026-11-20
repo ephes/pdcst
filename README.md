@@ -105,20 +105,22 @@ strings. Their exact spelling is preserved. A malformed identity reports an
 invalid schema (`StoreReadError`) and leaves both metadata stores unchanged
 during refresh.
 
-Repeated subscriptions refresh feed metadata and keep existing download associations
-only when the enclosure URL is unchanged and the stored filename still refers
-to a contained regular file. Subscription refresh checks the filename relative
-to the held episode directory with a single filesystem lookup that leaves
-symlinks unresolved. Each association must have a single owner among stored
-episodes. Refresh refuses case/Unicode-equivalent filenames and aliases to
-the same file. A conflicting association is cleared for each
-refreshed episode; unrelated records stay unchanged. Symlink loops, missing files
-and repository/recovery filenames are also unusable. Refresh never deletes linked
-or conflicting audio bytes. New episodes start undownloaded. A safely stored feed keeps its directory; distinct feeds with colliding
-titles receive numbered directory suffixes. An explicit `--podcast-dir` already
+Repeated subscriptions refresh feed metadata and check download associations
+for every retained episode, including those outside the current feed window.
+Refresh looks up each filename relative to the held episode directory without
+following symlinks. It clears associations to missing or nonregular files,
+repository/recovery names, and files with ambiguous ownership, including
+case/Unicode-equivalent names and aliases to the same file. Episodes in the
+current feed also lose their association if the enclosure URL changed.
+Historical episodes keep their feed metadata and usable audio references.
+Refresh leaves all physical audio entries untouched. New episodes start undownloaded.
+A safely stored feed keeps its directory. Distinct feeds with colliding titles
+receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.
 Directory ownership uses NFC Unicode normalization and case folding on every host.
-Subscription preflight builds one ownership index under the writer lock, resolving
+Refresh uses one validated subscription catalog under the writer lock for
+directory selection, ownership checks and the metadata update. Subscription
+preflight builds one ownership index, resolving
 each other subscription directory once; numbered suffix trials use that index.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
 feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio
@@ -442,7 +444,8 @@ GUID under a per-podcast `episodes.json.download.lock`. Concurrent downloads for
 that podcast wait for this claim; feed refreshes can proceed during transfer.
 Publication rechecks ownership under the JSON repository lock. A destination owned
 by another GUID or an unowned existing file is refused without replacing its bytes
-or changing download associations. Filename comparisons conservatively ignore case
+or changing download associations. Each ownership check uses one no-follow stat
+per file lookup, treating a missing entry as absent. Filename comparisons ignore case
 and normalize Unicode on all hosts. Repository filenames and symlink destinations
 (including loops) are refused. Unsafe sibling associations do not block unrelated
 downloads. A same-GUID
@@ -453,6 +456,8 @@ transfer and again during publication; an invalid destination leaves its entry
 and metadata untouched, without creating a publication intent. A destination
 generation that changes after the intent is written is also refused before old
 audio is moved, and the unused intent is retired.
+Download validates the stored filename pattern syntax before reading episodes.
+The rendered filename is checked against the byte limit after episode selection.
 Use a distinct filename pattern (for
 example, one including `{index}`) to resolve episode name collisions.
 

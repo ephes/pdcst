@@ -299,3 +299,20 @@ def test_episode_selection_folds_each_visited_title_once(
         with pytest.raises(pdcst.SelectionError, match=rf"\({match_count} matches\)"):
             pdcst.find_episode_by_identifier(podcast, identifier, unique=unique)
     assert visited == (titles if unique else titles[:1])
+
+
+@pytest.mark.parametrize("pattern", ["{title[0]}", "{title:=5}"])
+def test_invalid_stored_filename_pattern_precedes_episode_read(
+    tmp_path, monkeypatch, podcast, pattern
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.file_name_pattern = pattern
+    PodcastRepository(tmp_path).add(podcast)
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("invalid stored pattern reached the episode repository")
+
+    monkeypatch.setattr(EpisodeRepository, "list", unexpected_read)
+    result = CliRunner().invoke(pdcst.cli, ["download", podcast.title, "episode"])
+    assert result.exit_code != 0
+    assert "Invalid filename pattern" in result.output
