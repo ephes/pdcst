@@ -1,5 +1,20 @@
 # Unreleased
 
+* Refuse legacy subscriptions whose derived directory collides with another
+  feed's directory after normalization: `podcasts` names the affected feeds,
+  `episodes` and `download` refuse only those feeds, and the API raises
+  `SharedDirectoryError`.
+
+* Retry incomplete or changed-generation metadata reads once under the owner
+  lock when a publication marker is observed.
+
+* Preserve the original staging error when closing the staging descriptor also
+  fails. A standalone close failure stops publication before replacement.
+
+* Abort refresh on permission or I/O errors checking retained audio, preserving
+  both catalogs and their existing download associations. Stored names that
+  cannot exist on the filesystem still count as missing.
+
 * Clear unusable audio references for episodes outside the refreshed feed window.
 
 * Use a single no-follow lookup per file during download ownership checks.

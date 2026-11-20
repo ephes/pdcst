@@ -81,7 +81,13 @@ def replacement_file(target, *, binary=False, directory_fd=None):
                     mode = stat.S_IMODE(info.st_mode)
                 os.fchmod(output.fileno(), mode)
                 os.fsync(output.fileno())
-        finally:
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass  # Preserve the original staging failure.
+            raise
+        else:
             os.close(descriptor)
         if directory_fd is None:
             os.replace(temporary, target)

@@ -1,7 +1,10 @@
 """A publication beginning during a read must be resolved before acceptance."""
 
+import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,8 +20,9 @@ from pdcst.repository import (
 
 @pytest.mark.parametrize("marker_name", [AUDIO_INTENT, REFRESH_INTENT])
 @pytest.mark.parametrize("settled", [False, True])
+@pytest.mark.parametrize("short_read", [False, True])
 def test_postread_marker_fences_or_rereads(
-    tmp_path, monkeypatch, episode, marker_name, settled
+    tmp_path, monkeypatch, episode, marker_name, settled, short_read
 ):
     writer = EpisodeRepository(tmp_path)
     writer.add(episode)
@@ -29,13 +33,27 @@ def test_postread_marker_fences_or_rereads(
     original_markers = reader._intent_markers
     calls = []
 
+    real_fdopen = os.fdopen
+
+    @contextmanager
+    def open_short_generation(descriptor, *args, **kwargs):
+        with real_fdopen(descriptor, *args, **kwargs) as source:
+            yield SimpleNamespace(
+                fileno=source.fileno, read=lambda limit: source.read(1)
+            )
+
     def interrupted_read():
-        old = original_read()
         calls.append(True)
-        if len(calls) == 1:
+        if len(calls) > 1:
+            return original_read()
+        try:
+            with monkeypatch.context() as patch:
+                if short_read:
+                    patch.setattr(os, "fdopen", open_short_generation)
+                return original_read()
+        finally:
             read_started.set()
             assert published.wait(5)
-        return old
 
     def observe_markers():
         markers = original_markers()

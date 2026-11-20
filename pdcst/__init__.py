@@ -19,6 +19,7 @@ from .repository import (
     EpisodeRepository,
     FeedParserRepository,
     PodcastRepository,
+    SharedDirectoryError,
     StoreReadError,
     StoreWriteError,
 )
@@ -66,6 +67,11 @@ def contained_path(root, *parts):
     if destination == root or root not in destination.parents:
         raise ValueError("Destination escapes PDCST_HOME")
     return destination
+
+
+def _subscription_directory_key(root, directory):
+    """Identify directories for cross-feed ownership on every host."""
+    return unicodedata.normalize("NFC", str(contained_path(root, directory))).casefold()
 
 
 def subscription_directory(directory, root=None):
@@ -135,23 +141,18 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                     if legacy_path.is_dir():
                         podcast.directory = legacy
 
-        def directory_key(directory):
-            return unicodedata.normalize(
-                "NFC", str(contained_path(settings.root, directory))
-            ).casefold()
-
         owners = set()
         for item in subscriptions:
             if item.feed.url == feed_url:
                 continue
             try:
-                owners.add(directory_key(item.directory))
+                owners.add(_subscription_directory_key(settings.root, item.directory))
             except ValueError:
                 # Unsafe legacy paths cannot own a contained destination.
                 continue
 
         def owned(directory):
-            return directory_key(directory) in owners
+            return _subscription_directory_key(settings.root, directory) in owners
 
         if owned(podcast.directory):
             if podcast_dir is not None or existing is not None:
@@ -242,7 +243,15 @@ def _find_title(items, identifier, kind, unique):
 
 
 def find_podcast_by_identifier(identifier: str, *, unique=False) -> Podcast | None:
-    return _find_title(list_all_podcasts(), identifier, "podcast", unique)
+    try:
+        podcasts = list_all_podcasts()
+    except SharedDirectoryError as error:
+        # Refuse only a selection that maps to a shared directory.
+        podcast = _find_title(error.podcasts, identifier, "podcast", unique)
+        if any(podcast is shared for shared in error.shared):
+            raise
+        return podcast
+    return _find_title(podcasts, identifier, "podcast", unique)
 
 
 def find_episode_by_identifier(
@@ -288,6 +297,15 @@ def list_podcasts():
     """
     try:
         all_podcasts = list_all_podcasts()
+    except SharedDirectoryError as error:
+        feeds = "; ".join(
+            f"{terminal_text(podcast.title)} <{terminal_text(podcast.feed.url)}>"
+            for podcast in error.shared
+        )
+        raise typer.BadParameter(
+            f"{error}; re-add one of these feeds with a distinct --podcast-dir: "
+            f"{feeds}"
+        ) from None
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:

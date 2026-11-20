@@ -114,6 +114,31 @@ class StoreReadError(ValueError):
         super().__init__(f"Cannot read metadata {path}: {category}")
 
 
+class _StoreGenerationError(StoreReadError):
+    """The read did not obtain one complete metadata generation."""
+
+
+class SharedDirectoryError(StoreReadError):
+    """Legacy subscriptions map to a directory another feed uses.
+
+    ``podcasts`` holds the full listing and ``shared`` the subscriptions
+    involved; the message itself contains no stored values.
+    """
+
+    def __init__(self, path, podcasts, shared):
+        self.podcasts = podcasts
+        self.shared = shared
+        super().__init__(
+            path,
+            "Podcast directory is already used by another feed; "
+            "choose a distinct --podcast-dir for one subscription",
+        )
+
+
+# A stored name that cannot refer to any directory entry retains no audio.
+_ABSENT_NAME_ERRNOS = frozenset({errno.ENOENT, errno.ENAMETOOLONG, errno.EILSEQ})
+
+
 class StoreWriteError(ValueError):
     """Metadata cannot be safely written or its advisory lock admitted."""
 
@@ -479,9 +504,11 @@ class JsonRepository:
                 if generation(info) != generation(after) or (
                     info.st_ctime_ns != after.st_ctime_ns and not unlinked
                 ):
-                    raise StoreReadError(self.path, "file generation changed; retry")
+                    raise _StoreGenerationError(
+                        self.path, "file generation changed; retry"
+                    )
                 if len(data) != info.st_size:
-                    raise StoreReadError(self.path, "incomplete read; retry")
+                    raise _StoreGenerationError(self.path, "incomplete read; retry")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         return data
@@ -533,25 +560,37 @@ class JsonRepository:
                 markers.append(marker)
         return markers
 
-    def _fetch_all(self):
+    def _read_confirmed_bytes(self):
         self._check_intents()
-        data = self._read_bytes()
-        markers = self._intent_markers()
-        if markers:
-            if self.__dict__.get("_lock_depth"):
-                self._check_intents()
-            try:
-                # The first bytes may overlap a publication. Wait/recheck using
-                # its owner lock and reread a settled generation while holding it.
-                with self._lock():
-                    data = self._read_bytes()
-            except StoreWriteError as error:
-                raise StoreReadError(
-                    self.path,
-                    f"publication marker {markers[0]} observed during read and its "
-                    f"lock is unavailable ({error}); retry later, or follow README "
-                    "interrupted-publication recovery",
-                ) from error
+        try:
+            data = self._read_bytes()
+        except _StoreGenerationError:
+            markers = self._intent_markers()
+            if not markers:
+                raise
+        else:
+            markers = self._intent_markers()
+            if not markers:
+                return data
+
+        # The first read may overlap a publication. Wait/recheck using the
+        # owner lock and reread a settled generation while holding it.
+        if self.__dict__.get("_lock_depth"):
+            self._check_intents()
+            return self._read_bytes()
+        try:
+            with self._lock():
+                return self._read_bytes()
+        except StoreWriteError as error:
+            raise StoreReadError(
+                self.path,
+                f"publication marker {markers[0]} observed during read and its "
+                f"lock is unavailable ({error}); retry later, or follow README "
+                "interrupted-publication recovery",
+            ) from error
+
+    def _fetch_all(self):
+        data = self._read_confirmed_bytes()
         if data is None:
             return {}
         try:
@@ -1111,8 +1150,15 @@ class EpisodeRepository(JsonRepository):
                 continue
             try:
                 info = self._stat(self.base_dir / name)
-            except (ValueError, OSError):
+            except ValueError:
+                # Invalid path strings cannot retain audio.
                 continue
+            except OSError as error:
+                # Absent entries and impossible names cannot retain audio;
+                # permission and I/O failures abort the refresh.
+                if error.errno in _ABSENT_NAME_ERRNOS:
+                    continue
+                raise
             if not stat.S_ISREG(info.st_mode):
                 continue
             identity = (info.st_dev, info.st_ino)
@@ -1407,10 +1453,32 @@ class PodcastRepository(JsonRepository):
         return podcast
 
     def list(self, additional_attributes=None):
-        return [
+        from . import _subscription_directory_key
+
+        podcasts = [
             self._listed_podcast(stored, additional_attributes)
             for stored in self.all.values()
         ]
+        if not any(podcast._legacy_directory for podcast in podcasts):
+            return podcasts
+
+        groups = {}
+        for podcast in podcasts:
+            try:
+                key = _subscription_directory_key(self.base_dir, podcast.directory)
+            except ValueError:
+                # Unsafe legacy paths cannot own a contained destination.
+                continue
+            groups.setdefault(key, []).append(podcast)
+        shared = [
+            podcast
+            for group in groups.values()
+            if len(group) > 1 and any(item._legacy_directory for item in group)
+            for podcast in group
+        ]
+        if shared:
+            raise SharedDirectoryError(self.path, podcasts, shared)
+        return podcasts
 
     @contextmanager
     def download_subscription(self, podcast):
@@ -1419,7 +1487,11 @@ class PodcastRepository(JsonRepository):
         The directory is validated like a subscription directory, and refused
         when another feed already uses it, before any download starts.
         """
-        from . import contained_path, subscription_directory
+        from . import (
+            _subscription_directory_key,
+            contained_path,
+            subscription_directory,
+        )
 
         if not podcast._legacy_directory:
             yield podcast, None
@@ -1447,17 +1519,14 @@ class PodcastRepository(JsonRepository):
                     f"{error}; set a distinct directory in podcasts.json"
                 ) from None
 
-            def directory_key(directory):
-                return unicodedata.normalize(
-                    "NFC", str(contained_path(root, directory))
-                ).casefold()
-
-            target = directory_key(current.directory)
+            target = _subscription_directory_key(root, current.directory)
             for url, other in rows.items():
                 if url == podcast.feed.url:
                     continue
                 try:
-                    other_key = directory_key(admitted._listed_podcast(other).directory)
+                    other_key = _subscription_directory_key(
+                        root, admitted._listed_podcast(other).directory
+                    )
                 except ValueError:
                     # Unsafe legacy paths cannot own a contained destination.
                     continue
