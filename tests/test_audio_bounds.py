@@ -11,6 +11,42 @@ from pdcst.config import Settings
 from pdcst.repository import EpisodeRepository
 
 
+def test_fragmented_audio_coalesces_progress(tmp_path, monkeypatch):
+    module = importlib.import_module("pdcst.download")
+    clock = [0.0]
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+    updates = []
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            for index in range(1001):
+                if index in {499, 999}:
+                    clock[0] += 0.2
+                yield b"x"
+
+    def record_progress(self, task, *, completed):
+        updates.append(completed)
+
+    monkeypatch.setattr(module.rich.progress.Progress, "update", record_progress)
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, stream=Stream())
+            ),
+            **kw,
+        ),
+    )
+    target = tmp_path / "audio.mp3"
+
+    module.download_with_progress("https://example.invalid/audio", target)
+
+    assert target.read_bytes() == b"x" * 1001
+    assert updates == [500, 1000, 1001]
+
+
 @pytest.mark.parametrize("case", ["declared", "chunked", "trickle", "headers", "eof"])
 def test_audio_budget_preserves_audio_and_metadata(
     tmp_path, monkeypatch, podcast, episode, case

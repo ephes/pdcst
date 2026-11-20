@@ -1,5 +1,8 @@
 # Unreleased
 
+* Coalesce audio progress updates during streaming and display the exact byte
+  count at the end of the stream.
+
 * Preserve the original replacement failure if removing the stage also fails,
   and skip stage removal once its name has been consumed by replacement.
 

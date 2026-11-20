@@ -382,6 +382,8 @@ Redirect responses are closed without reading their bodies. Relative locations,
 cookies and authorization headers follow HTTPX's redirect rules. All hops and
 the final body share one elapsed deadline; only the final body is retained and
 counted against the audio byte limit.
+Audio progress updates are spaced at least a tenth of a second apart during
+streaming. At the end of the stream the display receives the exact byte count.
 Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
 elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
 must be finite. Larger episodes can use higher limits. Declared lengths over the

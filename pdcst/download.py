@@ -17,6 +17,7 @@ MEDIA_TYPES = frozenset(AUDIO_MIME_EXTENSIONS) | {
     "application/octet-stream",
     "binary/octet-stream",
 }
+PROGRESS_UPDATE_INTERVAL = 0.1
 
 
 class DownloadError(ValueError):
@@ -103,6 +104,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         rich.progress.TransferSpeedColumn(),
                     ) as progress:
                         task = progress.add_task("Download", total=total)
+                        next_update = monotonic() + PROGRESS_UPDATE_INTERVAL
                         for chunk in response.iter_raw():
                             check_deadline()
                             if completed + len(chunk) > settings.audio_max_bytes:
@@ -111,7 +113,11 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                                 )
                             output.write(chunk)
                             completed += len(chunk)
-                            progress.update(task, completed=completed)
+                            now = monotonic()
+                            if now >= next_update:
+                                progress.update(task, completed=completed)
+                                next_update = now + PROGRESS_UPDATE_INTERVAL
+                        progress.update(task, completed=completed)
                     check_deadline()
                     if completed == 0:
                         raise DownloadError("Empty audio response")
