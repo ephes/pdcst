@@ -32,6 +32,32 @@ def test_padded_index_and_escaped_braces(podcast, episode):
     assert podcast.get_audio_file_name(episode) == "{show}_001_refactoring.mp3"
 
 
+def test_filename_resolves_only_referenced_fields_once(podcast, episode, monkeypatch):
+    calls = []
+    sanitize = podcast.title_for_filename
+
+    def record(value):
+        calls.append(value)
+        return sanitize(value)
+
+    monkeypatch.setattr(podcast, "title_for_filename", record)
+    episode.title = "Synthetic Long Title " * 4_096
+    episode.audio_url = "https://example.test/download.CUSTOM?"
+    episode.audio_media_type = None
+    podcast.file_name_pattern = "{{title}}_{index:03}.mp3"
+    assert podcast.get_audio_file_name(episode) == "{title}_001.mp3"
+    assert calls == []
+
+    podcast.file_name_pattern = "{title:.9}_{title:.4}.{{file_format}}"
+    assert podcast.get_audio_file_name(episode) == "synthetic_synt.{file_format}"
+    assert calls == [episode.title]
+
+    calls.clear()
+    podcast.file_name_pattern = "{index}.{file_format:.3}.{file_format}"
+    assert podcast.get_audio_file_name(episode) == "1.cus.custom"
+    assert calls == ["CUSTOM"]
+
+
 @pytest.mark.parametrize(
     "pattern",
     [

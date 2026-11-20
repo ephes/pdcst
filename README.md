@@ -341,6 +341,8 @@ grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`, `n` (not `c`);
 string fields accept width (not starting with `0`) and/or `.precision`,
 optionally followed by `s`. For example, `{index:03d}_{title:.100}.{file_format}`
 limits the title to 100 characters and `{index:>3}` right-aligns the index.
+Only referenced fields are prepared, so `{index:03}.mp3` needs neither title
+sanitization nor extension lookup. Repeated fields reuse their prepared values.
 Other format syntax is refused before formatting. Patterns are limited to 4,096
 characters and the complete basename to 255 UTF-8 bytes, including literals and
 repeated fields; excess output is rejected rather than truncated. Existing

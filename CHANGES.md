@@ -1,5 +1,8 @@
 # Unreleased
 
+* Prepare only the episode fields used in an audio filename pattern, once per
+  field.
+
 * Accept complete audio destination scans at the exact entry cap, including
   the publication recheck.
 
