@@ -9,7 +9,7 @@ import rich.progress
 
 from .config import settings
 from .models import AUDIO_MIME_EXTENSIONS
-from .storage import PublicationDurabilityError, replacement_file
+from .storage import replacement_file
 
 MEDIA_TYPES = frozenset(AUDIO_MIME_EXTENSIONS) | {
     "application/ogg",
@@ -28,11 +28,6 @@ def download_with_progress(url, target_path, *, directory_fd=None):
     """Transfer audio, reporting transport failures without private URL values."""
     try:
         return _download_with_progress(url, target_path, directory_fd=directory_fd)
-    except PublicationDurabilityError:
-        # The target is an internal stage; publication has not happened yet.
-        raise DownloadError(
-            "Unable to stage audio download: directory sync failed"
-        ) from None
     except httpx.HTTPStatusError as error:
         raise DownloadError(
             f"Audio download failed (HTTP {error.response.status_code})"

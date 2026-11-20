@@ -1,5 +1,8 @@
 # Unreleased
 
+* Report uncertain durability after direct audio replacement and keep stage-sync
+  failures classified as download errors for repository-owned transfers.
+
 * Clear retained download references to empty or oversized audio on refresh,
   warning with a count and leaving the files untouched.
 

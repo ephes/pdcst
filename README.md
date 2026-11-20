@@ -429,9 +429,12 @@ values raise `DownloadError` before creating output. A valid length
 must match the received bytes. A response must contain at least one body byte;
 empty success responses raise `DownloadError` and preserve previous audio and
 metadata, including zero-length and empty chunked responses. A directory-sync
-failure while staging the transfer is reported as an ordinary download failure
-(`DownloadError`); the stage is removed and nothing is published. This is a transfer
-completeness check, not an audio codec validation. Responses with a content
+failure while staging a repository transfer is reported as `DownloadError`.
+The repository removes its stage and preserves previous audio and metadata.
+For direct `download_with_progress` calls, a directory-sync failure after
+replacement raises `pdcst.storage.PublicationDurabilityError`. Its `path`
+contains the complete replacement bytes, with uncertain durability. The
+response checks verify transfer completeness without validating the audio codec. Responses with a content
 encoding other than identity are rejected. Replacements preserve the permissions
 of existing regular files and refuse symlinks and other nonregular destinations
 before publication. New files use 0666 filtered by the process umask.

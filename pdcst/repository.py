@@ -34,6 +34,7 @@ from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
 from pydantic import BaseModel, ValidationError, conint, constr, parse_obj_as, validator
 
 from .config import settings
+from .download import DownloadError
 from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
 from .storage import (
     DirectoryAdmissionError,
@@ -933,7 +934,12 @@ class EpisodeRepository(JsonRepository):
             rollback_failed = False
             stage_descriptor = None
             try:
-                transfer(episode.audio_url, stage, directory_fd=self._directory_fd)
+                try:
+                    transfer(episode.audio_url, stage, directory_fd=self._directory_fd)
+                except PublicationDurabilityError:
+                    raise DownloadError(
+                        "Unable to stage audio download: directory sync failed"
+                    ) from None
                 try:
                     stage_descriptor = os.open(
                         stage.name,
