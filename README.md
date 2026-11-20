@@ -387,8 +387,10 @@ streaming. At the end of the stream the display receives the exact byte count.
 Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
 elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
 must be finite. Larger episodes can use higher limits. Declared lengths over the
-byte limit are rejected before creating output; each raw chunk is checked before
-writing, and elapsed time is checked again before publication. HTTP operations
+byte limit are rejected before creating output. The elapsed deadline is checked
+after staging opens and again after progress setup, before reading the body.
+Each raw chunk is checked before writing, and elapsed time is checked again
+before publication. HTTP operations
 time out after at most 10 seconds (or the remaining elapsed budget if smaller), so a
 blocked operation may finish its timeout before the elapsed limit is checked.
 The transfer helper `download_with_progress` raises `DownloadError` (a `ValueError`)

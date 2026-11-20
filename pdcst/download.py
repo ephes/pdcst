@@ -97,6 +97,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                 with replacement_file(
                     target_path, binary=True, directory_fd=directory_fd
                 ) as output:
+                    check_deadline()
                     completed = 0
                     with rich.progress.Progress(
                         rich.progress.BarColumn(bar_width=None),
@@ -105,6 +106,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                     ) as progress:
                         task = progress.add_task("Download", total=total)
                         next_update = monotonic() + PROGRESS_UPDATE_INTERVAL
+                        check_deadline()
                         for chunk in response.iter_raw():
                             check_deadline()
                             if completed + len(chunk) > settings.audio_max_bytes:

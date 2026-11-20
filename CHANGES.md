@@ -1,5 +1,8 @@
 # Unreleased
 
+* Check the audio deadline after opening the stage and setting up progress,
+  before reading any response body bytes.
+
 * Coalesce audio progress updates during streaming and display the exact byte
   count at the end of the stream.
 
