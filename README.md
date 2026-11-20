@@ -113,6 +113,9 @@ repository/recovery names, and files with ambiguous ownership, including
 case/Unicode-equivalent names and aliases to the same file. Episodes in the
 current feed also lose their association if the enclosure URL changed.
 Historical episodes keep their feed metadata and usable audio references.
+Refresh also clears references to empty files and files over
+`PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
+references. Files exactly at the limit remain eligible.
 A permission or I/O error while checking a retained file aborts the refresh
 before either metadata store changes; a stored name that cannot exist (too long
 or an invalid byte sequence for the filesystem) counts as missing. Refresh leaves all physical audio entries

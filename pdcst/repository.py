@@ -49,6 +49,10 @@ AUDIO_DESTINATION_SCAN_MAX_ENTRIES = 10_000
 AUDIO_DESTINATION_SCAN_MAX_SECONDS = 1.0
 
 
+def _audio_size_admitted(info):
+    return 0 < info.st_size <= settings.audio_max_bytes
+
+
 @dataclass
 class _DestinationScanBudget:
     entries: int
@@ -737,10 +741,7 @@ class EpisodeRepository(JsonRepository):
             raise DownloadConflict(
                 "Audio stage unavailable or generation changed"
             ) from None
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or not 0 < info.st_size <= settings.audio_max_bytes
-        ):
+        if not stat.S_ISREG(info.st_mode) or not _audio_size_admitted(info):
             raise DownloadConflict(
                 "Audio stage must be a nonempty regular file within the audio byte limit"
             )
@@ -1129,8 +1130,9 @@ class EpisodeRepository(JsonRepository):
                             self._unlink(stage)
 
     def _usable_audio_files(self, locked):
-        """Retain only regular, non-symlink files with one unambiguous owner."""
+        """Retain only size-admitted regular files with one unambiguous owner."""
         candidates = {}
+        refused_size = 0
         names = Counter()
         files = Counter()
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
@@ -1162,9 +1164,19 @@ class EpisodeRepository(JsonRepository):
             if not stat.S_ISREG(info.st_mode):
                 continue
             identity = (info.st_dev, info.st_ino)
-            candidates[row.pk] = (name, key, identity)
             names[key] += 1
             files[identity] += 1
+            if _audio_size_admitted(info):
+                candidates[row.pk] = (name, key, identity)
+            else:
+                refused_size += 1
+        if refused_size:
+            warnings.warn(
+                f"Ignoring {refused_size} retained audio references to empty files "
+                "or files over the audio byte limit",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return {
             guid: name
             for guid, (name, key, identity) in candidates.items()

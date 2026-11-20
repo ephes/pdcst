@@ -1,5 +1,8 @@
 # Unreleased
 
+* Clear retained download references to empty or oversized audio on refresh,
+  warning with a count and leaving the files untouched.
+
 * Refuse legacy subscriptions whose derived directory collides with another
   feed's directory after normalization: `podcasts` names the affected feeds,
   `episodes` and `download` refuse only those feeds, and the API raises

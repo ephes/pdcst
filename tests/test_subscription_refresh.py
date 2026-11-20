@@ -426,6 +426,7 @@ def test_refresh_drops_file_aliases_on_every_host(
         if not follow_symlinks and path in (first, second):
             return SimpleNamespace(
                 st_mode=info.st_mode,
+                st_size=info.st_size,
                 st_dev=info.st_dev,
                 st_ino=(
                     info.st_ino
@@ -679,6 +680,42 @@ def test_refresh_reconciles_audio_for_episodes_outside_feed_window(
     assert after[missing.guid].dict() == expected_missing
     assert after[valid.guid].dict() == before[valid.guid].dict()
     assert audio.read_bytes() == b"synthetic audio"
+
+
+def test_refresh_clears_empty_and_oversized_audio(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    monkeypatch.setattr(pdcst.settings, "audio_max_bytes", 4)
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    payloads = {"empty": b"", "valid": b"1234", "oversized": b"12345"}
+    rows = []
+    for index, guid in enumerate(payloads, 1):
+        row = copy.copy(episode)
+        row.guid = guid
+        row.index = index
+        row.audio_file = f"{guid}.mp3"
+        rows.append(row)
+    episodes.add_list(rows)
+    for row in rows:
+        (episodes.base_dir / row.audio_file).write_bytes(payloads[row.guid])
+
+    class Parser:
+        def get(self, *_):
+            return podcast, rows[:1]
+
+    with pytest.warns(RuntimeWarning, match="2 retained audio references.*byte limit"):
+        pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+
+    assert {row.guid: row.audio_file for row in episodes.list()} == {
+        "empty": None,
+        "valid": "valid.mp3",
+        "oversized": None,
+    }
+    for row in rows:
+        assert (episodes.base_dir / row.audio_file).read_bytes() == payloads[row.guid]
 
 
 @pytest.mark.parametrize("failure", [PermissionError, OSError])
