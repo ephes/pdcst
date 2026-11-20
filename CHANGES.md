@@ -1,5 +1,8 @@
 # Unreleased
 
+* Retry incomplete or changed-generation metadata reads once under the owner
+  lock when a publication marker is observed.
+
 * Preserve the original staging error when closing the staging descriptor also
   fails. A standalone close failure stops publication before replacement.
 

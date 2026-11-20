@@ -114,6 +114,10 @@ class StoreReadError(ValueError):
         super().__init__(f"Cannot read metadata {path}: {category}")
 
 
+class _StoreGenerationError(StoreReadError):
+    """The read did not obtain one complete metadata generation."""
+
+
 class StoreWriteError(ValueError):
     """Metadata cannot be safely written or its advisory lock admitted."""
 
@@ -479,9 +483,11 @@ class JsonRepository:
                 if generation(info) != generation(after) or (
                     info.st_ctime_ns != after.st_ctime_ns and not unlinked
                 ):
-                    raise StoreReadError(self.path, "file generation changed; retry")
+                    raise _StoreGenerationError(
+                        self.path, "file generation changed; retry"
+                    )
                 if len(data) != info.st_size:
-                    raise StoreReadError(self.path, "incomplete read; retry")
+                    raise _StoreGenerationError(self.path, "incomplete read; retry")
         except OSError:
             raise StoreReadError(self.path, "filesystem error") from None
         return data
@@ -533,25 +539,37 @@ class JsonRepository:
                 markers.append(marker)
         return markers
 
-    def _fetch_all(self):
+    def _read_confirmed_bytes(self):
         self._check_intents()
-        data = self._read_bytes()
-        markers = self._intent_markers()
-        if markers:
-            if self.__dict__.get("_lock_depth"):
-                self._check_intents()
-            try:
-                # The first bytes may overlap a publication. Wait/recheck using
-                # its owner lock and reread a settled generation while holding it.
-                with self._lock():
-                    data = self._read_bytes()
-            except StoreWriteError as error:
-                raise StoreReadError(
-                    self.path,
-                    f"publication marker {markers[0]} observed during read and its "
-                    f"lock is unavailable ({error}); retry later, or follow README "
-                    "interrupted-publication recovery",
-                ) from error
+        try:
+            data = self._read_bytes()
+        except _StoreGenerationError:
+            markers = self._intent_markers()
+            if not markers:
+                raise
+        else:
+            markers = self._intent_markers()
+            if not markers:
+                return data
+
+        # The first read may overlap a publication. Wait/recheck using the
+        # owner lock and reread a settled generation while holding it.
+        if self.__dict__.get("_lock_depth"):
+            self._check_intents()
+            return self._read_bytes()
+        try:
+            with self._lock():
+                return self._read_bytes()
+        except StoreWriteError as error:
+            raise StoreReadError(
+                self.path,
+                f"publication marker {markers[0]} observed during read and its "
+                f"lock is unavailable ({error}); retry later, or follow README "
+                "interrupted-publication recovery",
+            ) from error
+
+    def _fetch_all(self):
+        data = self._read_confirmed_bytes()
         if data is None:
             return {}
         try:

@@ -640,7 +640,9 @@ and retire their markers while holding the owning store lock (the episode store
 lock for episode-directory markers, the subscription store lock for the root
 marker). Readers check markers before and after reading bytes. A marker appearing during
 a read discards those bytes; after waiting for its owner lock, the reader rereads
-a settled generation under that lock. This does not provide a multi-store atomic
+a settled generation under that lock. The same check follows an incomplete or
+changed-generation read. When a marker is observed, the reader retries once
+under its owner lock. This does not provide a multi-store atomic
 read. A command that sees a marker waits for that lock, within the lock wait
 limit, and checks again: an in-progress publication only delays it, while a
 marker still present under the lock is unresolved. If the wait limit expires or
