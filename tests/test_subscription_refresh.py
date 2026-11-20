@@ -672,3 +672,41 @@ def test_refresh_reconciles_audio_for_episodes_outside_feed_window(
     assert after[missing.guid].dict() == expected_missing
     assert after[valid.guid].dict() == before[valid.guid].dict()
     assert audio.read_bytes() == b"synthetic audio"
+
+
+@pytest.mark.parametrize("failure", [PermissionError, OSError])
+def test_refresh_aborts_on_indeterminate_retained_audio_stat(
+    tmp_path, monkeypatch, podcast, episode, failure
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_file = "saved.mp3"
+    episodes.add(episode)
+    saved = episodes.base_dir / episode.audio_file
+    saved.write_bytes(b"synthetic audio")
+    before = {repo.path: repo.path.read_bytes() for repo in (shows, episodes)}
+
+    original_stat = EpisodeRepository._stat
+    error = failure("synthetic stat failure")
+
+    def fail_audio_stat(self, path):
+        if path == saved:
+            raise error
+        return original_stat(self, path)
+
+    class Parser:
+        def get(self, *_):
+            return podcast, []
+
+    with monkeypatch.context() as patch:
+        patch.setattr(EpisodeRepository, "_stat", fail_audio_stat)
+        with pytest.raises(OSError) as raised:
+            pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+        assert raised.value is error
+
+    assert {path: path.read_bytes() for path in before} == before
+    assert not list(tmp_path.rglob(".pdcst-refresh-*"))
+    assert episodes.list()[0].audio_file == saved.name
+    assert saved.read_bytes() == b"synthetic audio"

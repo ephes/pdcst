@@ -1111,7 +1111,8 @@ class EpisodeRepository(JsonRepository):
                 continue
             try:
                 info = self._stat(self.base_dir / name)
-            except (ValueError, OSError):
+            except (FileNotFoundError, ValueError):
+                # Absent entries and invalid path strings cannot retain audio.
                 continue
             if not stat.S_ISREG(info.st_mode):
                 continue

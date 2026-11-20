@@ -113,7 +113,9 @@ repository/recovery names, and files with ambiguous ownership, including
 case/Unicode-equivalent names and aliases to the same file. Episodes in the
 current feed also lose their association if the enclosure URL changed.
 Historical episodes keep their feed metadata and usable audio references.
-Refresh leaves all physical audio entries untouched. New episodes start undownloaded.
+A permission or I/O error while checking a retained file aborts the refresh
+before either metadata store changes. Refresh leaves all physical audio entries
+untouched. New episodes start undownloaded.
 A safely stored feed keeps its directory. Distinct feeds with colliding titles
 receive numbered directory suffixes. An explicit `--podcast-dir` already
 owned by another feed is rejected before either JSON repository changes.

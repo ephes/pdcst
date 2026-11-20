@@ -1,5 +1,8 @@
 # Unreleased
 
+* Abort refresh on permission or I/O errors checking retained audio, preserving
+  both catalogs and their existing download associations.
+
 * Clear unusable audio references for episodes outside the refreshed feed window.
 
 * Use a single no-follow lookup per file during download ownership checks.
