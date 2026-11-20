@@ -4,7 +4,8 @@
   field.
 
 * Accept complete audio destination scans at the exact entry cap, including
-  the publication recheck.
+  the publication recheck. Admission now processes at most 4,999 entries so
+  the recheck always has room for the transfer stage.
 
 * Report uncertain durability after direct audio replacement and keep stage-sync
   failures classified as download errors for repository-owned transfers.

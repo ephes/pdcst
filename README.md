@@ -377,11 +377,12 @@ Before transferring into an unowned audio filename, download scans the admitted
 folder for Unicode/case-equivalent names. Admission and publication share a fixed
 budget of 10,000 directory entries and one second of active scan time, including
 iterator acquisition/advancement and name normalization. Admission may process
-up to 5,000 entries and use up to half the scan time. The mandatory publication
-recheck uses the remainder and also sees the transfer stage. At either entry
-cap, one additional iterator step checks for the end of the listing within the
-deadline. An extra entry causes refusal before its name is normalized. Transfer
-time and lock waiting do not consume scan time. An incomplete scan refuses the download explicitly; unseen entries
+up to 4,999 entries and use up to half the scan time, so the mandatory
+publication recheck of the same folder plus the transfer stage still fits the
+remainder; folders with 5,000 or more entries are refused before any transfer.
+At either entry cap, one additional iterator step checks for the end of the
+listing within the deadline. An extra entry causes refusal before its name is
+normalized. Transfer time and lock waiting do not consume scan time. An incomplete scan refuses the download explicitly; unseen entries
 are never assumed free. If the budget expires only on the publication recheck
 (for example because the folder grew during the transfer), completed audio is retained as a recovery stage and
 metadata stays unchanged. Move unrelated directory entries aside or select a

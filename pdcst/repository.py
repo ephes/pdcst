@@ -58,8 +58,8 @@ def _audio_size_admitted(info):
 class _DestinationScanBudget:
     entries: int
     seconds: float
-    # Reserve at least half for the mandatory publication recheck, which also
-    # sees the transfer stage.
+    # Reserve more than half of the entries (and half of the time) for the
+    # mandatory publication recheck, which also sees the transfer stage.
     reserve_recheck: bool = False
 
 
@@ -837,7 +837,11 @@ class EpisodeRepository(JsonRepository):
                 AUDIO_DESTINATION_SCAN_MAX_ENTRIES, AUDIO_DESTINATION_SCAN_MAX_SECONDS
             )
         started = time.monotonic()
-        entries_left = budget.entries // 2 if budget.reserve_recheck else budget.entries
+        # Admission reserves one more entry than it may use: the recheck lists
+        # the same directory plus the transfer stage.
+        entries_left = (
+            (budget.entries - 1) // 2 if budget.reserve_recheck else budget.entries
+        )
         deadline = started + (
             budget.seconds / 2 if budget.reserve_recheck else budget.seconds
         )
