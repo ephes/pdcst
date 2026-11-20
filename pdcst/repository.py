@@ -795,28 +795,23 @@ class EpisodeRepository(JsonRepository):
         def name_key(value):
             return unicodedata.normalize("NFC", value).casefold()
 
-        def path_key(filename):
-            if Path(filename).name != filename or "\\" in filename:
-                raise ValueError("Unsafe audio association")
-            info = (
-                target_info
-                if filename == name
-                else self._existing_audio_info(self.base_dir / filename)
-            )
-            if info is not None and not stat.S_ISREG(info.st_mode):
-                raise ValueError("Unsafe audio association")
-            return name_key(filename)
-
         key = name_key(name)
         for row in locked.values():
-            if row.guid == guid or not row.audio_file:
+            filename = row.audio_file
+            if row.guid == guid or not filename or name_key(filename) != key:
+                continue
+            if Path(filename).name != filename or "\\" in filename:
                 continue
             try:
-                owner_key = path_key(row.audio_file)
+                info = (
+                    target_info
+                    if filename == name
+                    else self._existing_audio_info(self.base_dir / filename)
+                )
             except (ValueError, RuntimeError):
                 # Unsafe paths and symlink loops cannot own a contained file.
                 continue
-            if owner_key == key:
+            if info is None or stat.S_ISREG(info.st_mode):
                 raise DownloadConflict(
                     "Audio destination is already owned by another episode"
                 )

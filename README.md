@@ -465,9 +465,11 @@ GUID under a per-podcast `episodes.json.download.lock`. Concurrent downloads for
 that podcast wait for this claim; feed refreshes can proceed during transfer.
 Publication rechecks ownership under the JSON repository lock. A destination owned
 by another GUID or an unowned existing file is refused without replacing its bytes
-or changing download associations. Each ownership check uses one no-follow stat
-per file lookup, treating a missing entry as absent. Filename comparisons ignore case
-and normalize Unicode on all hosts. Repository filenames and symlink destinations
+or changing download associations. Ownership checks compare filenames using NFC
+normalization and case folding on all hosts before looking up other episodes' files.
+Matching associations use one no-follow stat per lookup. A matching association
+can reserve a filename even when its file is missing. An existing file must be
+regular for its association to count. Repository filenames and symlink destinations
 (including loops) are refused. Unsafe sibling associations do not block unrelated
 downloads. A same-GUID
 refresh of its associated file is allowed only when the existing destination is a

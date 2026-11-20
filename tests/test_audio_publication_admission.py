@@ -251,7 +251,7 @@ def test_download_admission_uses_one_stat_if_audio_disappears(
     if candidate == "association":
         sibling = copy.deepcopy(episode)
         sibling.guid = "synthetic-sibling"
-        sibling.audio_file = "sibling.mp3"
+        sibling.audio_file = "UNOWNED.MP3"
         repo.add(sibling)
         disappearing = repo.base_dir / sibling.audio_file
     else:
@@ -271,13 +271,11 @@ def test_download_admission_uses_one_stat_if_audio_disappears(
         return original(self, path)
 
     def transfer(*args, **kwargs):
-        if candidate == "destination":
-            pytest.fail("unowned destination reached transfer")
-        raise DownloadConflict("synthetic transfer stopped")
+        pytest.fail("unowned destination reached transfer")
 
     monkeypatch.setattr(EpisodeRepository, "_stat", remove_after_stat)
     expected = (
-        "unowned existing file" if candidate == "destination" else "transfer stopped"
+        "unowned existing file" if candidate == "destination" else "already owned"
     )
     with pytest.raises(DownloadConflict, match=expected):
         repo.download_episode(episode, target.name, transfer)
