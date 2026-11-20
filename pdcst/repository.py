@@ -31,7 +31,7 @@ from xml.sax import SAXParseException
 import feedparser
 import httpx
 from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
-from pydantic import BaseModel, ValidationError, conint, parse_obj_as, validator
+from pydantic import BaseModel, ValidationError, conint, constr, parse_obj_as, validator
 
 from .config import settings
 from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
@@ -238,8 +238,11 @@ class DownloadConflict(ValueError):
     """Episode identity or destination ownership changed."""
 
 
+StoredIdentity = constr(strict=True, min_length=1)
+
+
 class FeedInDb(BaseModel):
-    url: str
+    url: StoredIdentity
     updated: datetime
 
     _utc_updated = validator("updated", allow_reuse=True)(as_utc)
@@ -247,8 +250,8 @@ class FeedInDb(BaseModel):
 
 class EpisodeInDb(BaseModel):
     index: conint(strict=True, gt=0)
-    guid: str
-    audio_url: str
+    guid: StoredIdentity
+    audio_url: StoredIdentity
     published: datetime
     title: str
     audio_file: str | None
@@ -1078,8 +1081,6 @@ class EpisodeRepository(JsonRepository):
 
     def _usable_audio_files(self, locked):
         """Retain only regular, non-symlink files with one unambiguous owner."""
-        from . import contained_path
-
         candidates = {}
         names = Counter()
         files = Counter()
@@ -1090,20 +1091,19 @@ class EpisodeRepository(JsonRepository):
                 continue
             key = unicodedata.normalize("NFC", name).casefold()
             if (
-                Path(name).name != name
+                name in {".", ".."}
+                or Path(name).name != name
                 or "\\" in name
+                or PureWindowsPath(name).drive
                 or key in reserved
                 or key.startswith((".pdcst-download-", ".pdcst-refresh-"))
             ):
                 continue
             try:
-                if (self.base_dir / name).is_symlink():
-                    continue
-                path = contained_path(self.base_dir, name)
-                info = path.stat()
-                if not stat.S_ISREG(info.st_mode):
-                    continue
-            except (ValueError, RuntimeError, OSError):
+                info = self._stat(self.base_dir / name)
+            except (ValueError, OSError):
+                continue
+            if not stat.S_ISREG(info.st_mode):
                 continue
             identity = (info.st_dev, info.st_ino)
             candidates[row.pk] = (name, key, identity)
