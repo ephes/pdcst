@@ -1,5 +1,8 @@
 # Unreleased
 
+* Report shared episode directories even when all affected subscriptions have
+  explicitly saved paths, and refuse downloads for those subscriptions.
+
 * Refuse a legacy directory pin if the episode directory changed after audio
   publication, retaining the saved audio and metadata in the original directory.
 

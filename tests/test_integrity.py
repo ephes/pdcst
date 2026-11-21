@@ -172,6 +172,7 @@ def test_repository_failure_preserves_bytes(tmp_path, podcast, monkeypatch, fail
 def test_concurrent_adds(tmp_path, podcast, monkeypatch):
     other = copy.deepcopy(podcast)
     other.feed.url += "?other"
+    other.directory = "other"
     first_read = threading.Event()
     second_started = threading.Event()
     original = PodcastRepository._fetch_all

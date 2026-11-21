@@ -190,9 +190,10 @@ using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
-A legacy directory mapping that shares a resolved directory with another feed
-under NFC normalization and case folding is refused: `podcasts` fails and names
-the affected subscriptions by escaped title and HTTP(S) origin (scheme, host,
+A directory shared by multiple feeds is refused for both explicitly saved and
+legacy directories. Ownership uses resolved paths, NFC normalization and case
+folding. The `podcasts` command fails and names the affected subscriptions by
+escaped title and HTTP(S) origin (scheme, host,
 and optional port). Feed credentials, paths, queries, and fragments are omitted.
 If an origin cannot be parsed, the CLI displays `feed origin unavailable`.
 The `episodes` and `download` commands refuse
