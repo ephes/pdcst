@@ -290,3 +290,72 @@ def test_direct_download_retries_unsynced_relative_parent(
     assert (
         root / "shows" / "episodes" / target.name
     ).read_bytes() == b"completed audio"
+
+
+def _serve(monkeypatch, content):
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=content())
+            ),
+            **kwargs,
+        ),
+    )
+
+
+@pytest.mark.skipif(
+    not (getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)),
+    reason="platform has no search-only directory descriptors",
+)
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_direct_download_admits_existing_search_only_ancestor(tmp_path, monkeypatch):
+    guarded = tmp_path / "guarded"
+    destination = guarded / "shows"
+    destination.mkdir(parents=True)
+    target = destination / "saved.mp3"
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    guarded.chmod(0o311)
+    try:
+        assert download_with_progress("https://example.com/a.mp3", target) == target
+    finally:
+        guarded.chmod(0o755)
+    assert target.read_bytes() == b"completed audio"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_direct_download_refuses_new_link_below_unreadable_parent(
+    tmp_path, monkeypatch
+):
+    guarded = tmp_path / "guarded"
+    guarded.mkdir()
+    target = guarded / "shows" / "saved.mp3"
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    guarded.chmod(0o311)
+    try:
+        with pytest.raises(DownloadError, match="unreadable parent"):
+            download_with_progress("https://example.com/a.mp3", target)
+        assert not target.parent.exists()
+    finally:
+        guarded.chmod(0o755)
+
+
+def test_direct_download_reports_alias_change_as_download_error(tmp_path, monkeypatch):
+    root = tmp_path / "real"
+    root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    target = alias / "saved.mp3"
+
+    def chunks():
+        yield b"completed "
+        alias.unlink()
+        yield b"audio"
+
+    _serve(monkeypatch, chunks)
+    with pytest.raises(DownloadError, match="cannot be resolved") as raised:
+        download_with_progress("https://example.com/a.mp3", target)
+    assert str(tmp_path) not in str(raised.value)
+    assert list(root.iterdir()) == []

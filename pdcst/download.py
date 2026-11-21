@@ -1,6 +1,7 @@
 """Download audio without publishing incomplete or unsuccessful responses."""
 
 import logging
+import os
 from contextlib import ExitStack, suppress
 from pathlib import Path
 from time import monotonic
@@ -44,6 +45,48 @@ def download_with_progress(url, target_path, *, directory_fd=None):
         raise DownloadError("Unable to fetch audio") from None
     except DirectoryAdmissionError as error:
         raise DownloadError(str(error)) from None
+
+
+def _resolve_destination(parent):
+    try:
+        return parent.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise DirectoryAdmissionError(
+            "Audio destination directory cannot be resolved"
+        ) from None
+
+
+def _create_destination_parent(parent):
+    """Create missing directories only below a parent whose link can be synced.
+
+    Admission syncs every readable parent of the destination chain, so a retry
+    settles links left by an interrupted attempt. Existing search-only
+    ancestors stay usable, but a new link below one could never be synced.
+    """
+    base = parent
+    while True:
+        try:
+            base.resolve(strict=True)
+            break
+        except FileNotFoundError:
+            if base.parent == base:
+                break
+            base = base.parent
+        except (OSError, RuntimeError):
+            raise DirectoryAdmissionError(
+                "Audio destination directory cannot be opened or created"
+            ) from None
+    if base == parent:
+        return
+    try:
+        descriptor = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        raise DirectoryAdmissionError(
+            "Audio destination directory cannot be created below an "
+            "unreadable parent"
+        ) from None
+    os.close(descriptor)
+    parent.mkdir(parents=True, exist_ok=True)
 
 
 def _download_with_progress(url, target_path, *, directory_fd=None):
@@ -111,20 +154,17 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         parent = target_path.parent
                         # Keep pathname mkdir semantics for relative paths and
                         # existing directory aliases, then sync the real chain.
-                        parent.mkdir(parents=True, exist_ok=True)
-                        resolved = parent.resolve(strict=True)
+                        _create_destination_parent(parent)
+                        resolved = _resolve_destination(parent)
                         directory_fd, check = files.enter_context(
                             admitted_directory(
-                                resolved,
-                                create=False,
-                                label="Audio destination directory",
-                                require_parent_sync=True,
+                                resolved, label="Audio destination directory"
                             )
                         )
 
                         def check_destination():
                             check()
-                            if parent.resolve(strict=True) != resolved:
+                            if _resolve_destination(parent) != resolved:
                                 raise DirectoryAdmissionError(
                                     "Audio destination directory identity changed"
                                 )

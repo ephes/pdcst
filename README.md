@@ -463,10 +463,12 @@ metadata, including zero-length and empty chunked responses. A directory-sync
 failure while staging a repository transfer is reported as `DownloadError`.
 The repository removes its stage and preserves previous audio and metadata.
 Direct `download_with_progress` calls also sync the destination directory's
-ancestor links before staging, including when the destination is relative or
-uses a directory alias. The ancestors must be readable. A parent sync failure
-raises `DownloadError` before publishing audio. A retry syncs the same chain
-even when the directories already exist. A directory-sync failure after
+readable ancestor links before staging, including when the destination is
+relative or uses a directory alias. Existing search-only ancestors remain
+usable, but missing directories are created only below a readable parent;
+otherwise the call raises `DownloadError` before creating anything. A parent
+sync failure raises `DownloadError` before publishing audio. A retry syncs the
+same chain even when the directories already exist. A directory-sync failure after
 replacement raises `pdcst.storage.PublicationDurabilityError`. Its `path`
 contains the complete replacement bytes, with uncertain durability. The
 response checks verify transfer completeness without validating the audio codec. Responses with a content
