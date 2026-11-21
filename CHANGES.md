@@ -1,6 +1,8 @@
 # Unreleased
 
 * Sync ancestor directory links before direct audio downloads can publish.
+  Existing search-only ancestors remain usable; missing directories are
+  created only below a readable parent.
 
 * Sync new episode directory links before publication and retry parent syncs
   for directories left behind by a failed attempt.

@@ -563,6 +563,10 @@ When admitting a writable episode directory, pdcst syncs each readable parent
 before using the directory for publication. New directory links require a
 readable parent. If a parent sync fails, publication stops and a retry repeats
 the parent syncs, including for directories left behind by the failed attempt.
+Ancestors on read-only or sync-less filesystems (for example squashfs) are
+accepted when their child already exists; a new link there is refused. The
+destination directory itself must be readable, also for direct
+`download_with_progress` calls.
 
 Audio directory entries are synced before JSON publication; JSON replacement
 also syncs its parent before the previous audio backup may be retired. If JSON

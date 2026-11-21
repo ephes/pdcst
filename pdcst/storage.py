@@ -130,6 +130,7 @@ class DirectoryIdentityChanged(DirectoryAdmissionError):
 # A symlinked final component is refused with ELOOP (Linux/macOS), EMLINK
 # (FreeBSD) or ENOTDIR (O_DIRECTORY checked first).
 _REPLACED_COMPONENT_ERRORS = {errno.ELOOP, errno.EMLINK, errno.ENOTDIR}
+_UNSYNCABLE_DIRECTORY = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EROFS}
 # Ancestors need only search permission, as pathname traversal did.
 _SEARCH_ONLY = getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)
 
@@ -199,6 +200,7 @@ def admitted_directory(
             readable = True
             for position, name in enumerate(parts):
                 search_only_ok = position < len(parts) - 1
+                created = False
                 try:
                     child, child_readable = _open_component(
                         name, descriptor, search_only_ok=search_only_ok
@@ -210,6 +212,7 @@ def admitted_directory(
                         raise DirectoryAdmissionError(
                             f"{label} cannot be created below a search-only parent"
                         ) from None
+                    created = True
                     try:
                         os.mkdir(name, dir_fd=descriptor)
                     except FileExistsError:
@@ -224,10 +227,14 @@ def admitted_directory(
                     # a mkdir left behind by a failed sync or another writer.
                     try:
                         sync_directory(None, directory_fd=descriptor)
-                    except OSError:
-                        raise DirectoryAdmissionError(
-                            f"{label}: parent directory sync failed; retry the operation"
-                        ) from None
+                    except OSError as error:
+                        # Read-only or sync-less ancestors (squashfs, erofs)
+                        # cannot persist any link; only fail for a new one.
+                        if created or error.errno not in _UNSYNCABLE_DIRECTORY:
+                            raise DirectoryAdmissionError(
+                                f"{label}: parent directory sync failed; "
+                                "retry the operation"
+                            ) from None
                 descriptor = child
                 readable = child_readable
         except OSError as error:

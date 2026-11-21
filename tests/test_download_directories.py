@@ -278,3 +278,42 @@ def test_download_retries_unsynced_episode_directory_link(
     ]
     assert target.read_bytes() == b"completed audio"
     assert retry.list()[0].audio_file == target.name
+
+
+@pytest.mark.parametrize("new_link", [False, True])
+def test_unsyncable_ancestor_fails_only_for_new_links(
+    tmp_path, episode, monkeypatch, new_link
+):
+    import errno
+
+    from pdcst import storage
+
+    root = tmp_path.resolve()
+    source = repository.EpisodeRepository(root)
+    episode.audio_url = "https://example.com/audio.mp3"
+    source.add(episode)
+    destination = root / "episodes"
+    if not new_link:
+        destination.mkdir()
+    sync = storage.sync_directory
+    root_info = root.stat()
+
+    def sync_link(path, *, directory_fd=None):
+        info = os.fstat(directory_fd)
+        if (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino):
+            raise OSError(errno.EINVAL, "directory fsync unsupported")
+        sync(path, directory_fd=directory_fd)
+
+    monkeypatch.setattr(storage, "sync_directory", sync_link)
+    if not new_link:
+        (destination / source.name).write_bytes(source.path.read_bytes())
+    repo = repository.EpisodeRepository(destination)
+    if new_link:
+        with pytest.raises(DownloadConflict, match="directory sync failed"):
+            repo.download_episode(episode, "saved.mp3", _transfer)
+    else:
+        assert (
+            repo.download_episode(episode, "saved.mp3", _transfer)
+            == destination / "saved.mp3"
+        )
+        assert (destination / "saved.mp3").read_bytes() == b"completed audio"
