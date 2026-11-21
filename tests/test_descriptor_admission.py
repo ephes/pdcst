@@ -225,6 +225,92 @@ def test_interrupted_lock_wait_closes_descriptor(tmp_path, monkeypatch):
     assert closed == descriptors
 
 
+@pytest.mark.parametrize("outcome", ["refused", "failed", "completed"])
+def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, outcome):
+    import pdcst.repository as module
+
+    lock = tmp_path / "podcasts.json.lock"
+    catalog = tmp_path / "podcasts.json"
+    attempts = []
+    real_close = os.close
+    failure = ValueError("synthetic catalog publication failure")
+
+    def failing_close(descriptor):
+        attempts.append(descriptor)
+        real_close(descriptor)
+        raise OSError("synthetic close failure")
+
+    def publish():
+        with module.advisory_lock(lock):
+            if outcome == "failed":
+                raise failure
+            assert outcome == "completed"
+            catalog.write_bytes(b"[]")
+
+    monkeypatch.setattr(module.os, "close", failing_close)
+    if outcome == "refused":
+
+        def refuse(*args):
+            raise OSError("synthetic flock failure")
+
+        monkeypatch.setattr(module.fcntl, "flock", refuse)
+        with pytest.raises(
+            module.StoreWriteError, match="regular stable file required"
+        ):
+            publish()
+    elif outcome == "failed":
+        with pytest.raises(ValueError) as raised:
+            publish()
+        assert raised.value is failure
+    else:
+        with pytest.warns(RuntimeWarning, match="lock release uncertain"):
+            publish()
+        assert catalog.read_bytes() == b"[]"
+    assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("delay_at", ["flock", "stat"])
+def test_catalog_lock_refuses_late_admission(tmp_path, monkeypatch, delay_at):
+    import pdcst.repository as module
+
+    path = tmp_path / "podcasts.json.lock"
+    now = 100.0
+    descriptors = []
+    closed = []
+    real_flock = module.fcntl.flock
+    real_stat = os.stat
+    real_close = os.close
+
+    def flock(descriptor, operation):
+        nonlocal now
+        real_flock(descriptor, operation)
+        descriptors.append(descriptor)
+        if delay_at == "flock":
+            now = 101.0
+
+    def stat(entry, *args, **kwargs):
+        nonlocal now
+        info = real_stat(entry, *args, **kwargs)
+        if entry == path and delay_at == "stat":
+            now = 101.0
+        return info
+
+    def close(descriptor):
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(module.settings, "lock_wait_seconds", 1.0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: now)
+    monkeypatch.setattr(module.fcntl, "flock", flock)
+    monkeypatch.setattr(module.os, "stat", stat)
+    monkeypatch.setattr(module.os, "close", close)
+    with pytest.raises(module.StoreWriteError, match="busy .*retry later"):
+        with module.advisory_lock(path):
+            pytest.fail("catalog mutation started after its admission deadline")
+    assert len(descriptors) == 1
+    assert closed == descriptors
+
+
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
 def test_lock_wait_configuration_rejects_invalid_duration(tmp_path, value):
     from pydantic import ValidationError
@@ -240,3 +326,53 @@ def test_lock_wait_configuration_environment(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PDCST_LOCK_WAIT_SECONDS", "0.25")
     assert Settings(root=tmp_path).lock_wait_seconds == 0.25
+
+
+@pytest.mark.parametrize("source", ["constructor", "environment", "assignment"])
+def test_lock_wait_configuration_rejects_largest_finite_duration(
+    tmp_path, monkeypatch, source
+):
+    from pydantic import ValidationError
+
+    from pdcst.config import Settings
+
+    value = sys.float_info.max
+    if source == "constructor":
+        with pytest.raises(ValidationError, match="lock_wait_seconds"):
+            Settings(root=tmp_path, lock_wait_seconds=value)
+    elif source == "environment":
+        monkeypatch.setenv("PDCST_LOCK_WAIT_SECONDS", str(value))
+        with pytest.raises(ValidationError, match="lock_wait_seconds"):
+            Settings(root=tmp_path)
+    else:
+        configured = Settings(root=tmp_path, lock_wait_seconds=0.25)
+        with pytest.raises(ValidationError, match="lock_wait_seconds"):
+            configured.lock_wait_seconds = value
+        assert configured.lock_wait_seconds == 0.25
+
+
+def test_lock_wait_accepts_upper_bound(tmp_path):
+    from pdcst.config import Settings
+
+    assert Settings(root=tmp_path, lock_wait_seconds=86_400).lock_wait_seconds == 86_400
+
+
+def test_fractional_lock_wait_under_contention(tmp_path, monkeypatch):
+    import pdcst.repository as module
+    from pdcst.config import Settings
+
+    monkeypatch.setenv("PDCST_LOCK_WAIT_SECONDS", "0.125")
+    monkeypatch.setattr(module, "settings", Settings(root=tmp_path))
+    sleeps = []
+    real_flock = module.fcntl.flock
+
+    def flock(descriptor, operation):
+        if not sleeps:
+            raise BlockingIOError("synthetic contention")
+        real_flock(descriptor, operation)
+
+    monkeypatch.setattr(module.fcntl, "flock", flock)
+    monkeypatch.setattr(module.time, "monotonic", lambda: sum(sleeps))
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
+    with module.advisory_lock(tmp_path / "podcasts.json.lock"):
+        assert sleeps == [0.05]

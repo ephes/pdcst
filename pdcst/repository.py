@@ -177,6 +177,15 @@ def advisory_lock(path, *, directory_fd=None):
     """Admit a stable regular inode and wait for it under a monotonic budget."""
     descriptor = None
     deadline = time.monotonic() + settings.lock_wait_seconds
+
+    def remaining_wait():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise StoreWriteError(
+                f"Cannot acquire lock {path}: busy (wait limit exceeded); retry later"
+            )
+        return remaining
+
     try:
         try:
             descriptor = os.open(
@@ -189,11 +198,7 @@ def advisory_lock(path, *, directory_fd=None):
             if not stat.S_ISREG(info.st_mode):
                 raise OSError("not a regular lock file")
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise StoreWriteError(
-                        f"Cannot acquire lock {path}: busy (wait limit exceeded); retry later"
-                    )
+                remaining = remaining_wait()
                 try:
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
@@ -209,14 +214,28 @@ def advisory_lock(path, *, directory_fd=None):
                 named.st_ino,
             ):
                 raise OSError("lock identity changed")
+            remaining_wait()
         except OSError:
             raise StoreWriteError(
                 f"Cannot acquire lock {path}: regular stable file required"
             ) from None
         yield
-    finally:
+    except BaseException:
         if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass  # Preserve the admission or operation failure.
+        raise
+    else:
+        try:
             os.close(descriptor)
+        except OSError:
+            warnings.warn(
+                f"Operation completed; lock release uncertain for {path}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 def as_utc(value):
@@ -1471,7 +1490,7 @@ class PodcastRepository(JsonRepository):
             legacy = stored.title.lower().replace(" ", "_")
             try:
                 path = contained_path(self.base_dir, legacy)
-            except ValueError:
+            except (ValueError, RuntimeError):
                 return podcast
             if path.is_dir():
                 podcast.directory = legacy
