@@ -208,3 +208,43 @@ def test_response_close_failure_preserves_transfer_outcome(
     assert list(tmp_path.iterdir()) == [target]
     assert ("Audio transferred; response close failed" in caplog.text) == succeeded
     assert "QUERY_SECRET" not in caplog.text
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_client_close_failure_preserves_transfer_outcome(
+    tmp_path, monkeypatch, caplog, complete
+):
+    module = importlib.import_module("pdcst.download")
+    target = tmp_path / "audio.mp3"
+    target.write_bytes(b"old audio")
+    close_failures = []
+
+    class Transport(httpx.MockTransport):
+        def close(self):
+            close_failures.append(target.read_bytes())
+            raise httpx.CloseError(f"Private client close failure: {URL}")
+
+    def respond(request):
+        return httpx.Response(
+            200,
+            headers={"Content-Length": "8"},
+            stream=httpx.ByteStream(b"complete" if complete else b"short"),
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: client(transport=Transport(respond), **kw)
+    )
+
+    if complete:
+        assert module.download_with_progress(URL, target) == target
+    else:
+        with pytest.raises(module.DownloadError, match="Incomplete media response"):
+            module.download_with_progress(URL, target)
+
+    expected_audio = b"complete" if complete else b"old audio"
+    assert close_failures == [expected_audio]
+    assert target.read_bytes() == expected_audio
+    assert list(tmp_path.iterdir()) == [target]
+    assert ("Audio transferred; HTTP client close failed" in caplog.text) == complete
+    assert "QUERY_SECRET" not in caplog.text

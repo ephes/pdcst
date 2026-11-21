@@ -1,5 +1,8 @@
 # Unreleased
 
+* Return the completed audio path when closing the HTTP client fails after
+  publication, and preserve any earlier transfer error during client cleanup.
+
 * Preserve transfer and replacement errors when closing an audio response also
   fails. Report a close failure as a warning after successful audio output.
 
