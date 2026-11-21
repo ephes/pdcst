@@ -94,6 +94,65 @@ def test_five_redirects_close_unread_bodies_and_preserve_httpx_requests(
         )
 
 
+@pytest.mark.parametrize("case", ["accepted", "missing", "limit"])
+def test_redirect_close_failure_preserves_redirect_outcome(
+    tmp_path, monkeypatch, caplog, transport, case
+):
+    module, _, install = transport
+    target = tmp_path / "audio.mp3"
+    target.write_bytes(b"previous audio")
+    requests = []
+    bodies = []
+
+    def fail_close():
+        raise httpx.CloseError("private redirect close failure")
+
+    def respond(request):
+        requests.append(request.url.path)
+        if case == "accepted" and request.url.path == "/next":
+            return httpx.Response(200, stream=httpx.ByteStream(b"audio"))
+        body = RedirectBody(fail_close)
+        bodies.append(body)
+        return httpx.Response(302, headers={"Location": "/next"}, stream=body)
+
+    if case == "missing":
+        send = httpx.Client.send
+
+        def send_without_next_request(client, *args, **kwargs):
+            response = send(client, *args, **kwargs)
+            response.next_request = None
+            return response
+
+        monkeypatch.setattr(httpx.Client, "send", send_without_next_request)
+
+    install(respond)
+    url = "https://example.test/start"
+    if case == "accepted":
+        assert module.download_with_progress(url, target) == target
+        assert requests == ["/start", "/next"]
+        assert target.read_bytes() == b"audio"
+    else:
+        message = (
+            "Audio redirect did not prepare a request"
+            if case == "missing"
+            else "Unable to fetch audio"
+        )
+        with pytest.raises(module.DownloadError, match=message) as error:
+            module.download_with_progress(url, target)
+        if case == "limit":
+            assert isinstance(error.value.__context__, httpx.TooManyRedirects)
+        assert requests == (
+            ["/start"] if case == "missing" else ["/start"] + ["/next"] * 5
+        )
+        assert target.read_bytes() == b"previous audio"
+
+    assert all(body.closed and body.consumed == 0 for body in bodies)
+    expected_warnings = {"accepted": 1, "missing": 0, "limit": 5}[case]
+    warning = "Audio redirect accepted; response close failed"
+    assert caplog.text.count(warning) == expected_warnings
+    assert "private redirect close failure" not in caplog.text
+
+
 @pytest.mark.parametrize("entrypoint", ["cli", "repository"])
 @pytest.mark.parametrize(
     "case,expected_requests,message",
