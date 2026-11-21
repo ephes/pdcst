@@ -116,3 +116,53 @@ def test_legacy_integer_roundtrip(tmp_path, podcast, episode):
     episodes.add(episode)
     assert shows.list()[0].episodes_count == 0
     assert episodes.list()[0].index == 1
+
+
+@pytest.mark.parametrize("field", ["published", "feed.updated"])
+@pytest.mark.parametrize(
+    ("invalid", "valid", "expected"),
+    [
+        (
+            "0001-01-01T00:00:00+01:00",
+            "0001-01-01T01:00:00+01:00",
+            "0001-01-01T00:00:00+00:00",
+        ),
+        (
+            "9999-12-31T23:59:59-01:00",
+            "9999-12-31T22:59:59-01:00",
+            "9999-12-31T23:59:59+00:00",
+        ),
+    ],
+)
+def test_stored_date_offset_overflow(
+    tmp_path, podcast, episode, field, invalid, valid, expected
+):
+    is_episode = field == "published"
+    repo, model = (
+        (EpisodeRepository(tmp_path), episode)
+        if is_episode
+        else (PodcastRepository(tmp_path), podcast)
+    )
+    repo.add(model)
+    rows = json.loads(repo.path.read_text())
+    target, key = (rows[0], "published") if is_episode else (rows[0]["feed"], "updated")
+    target[key] = valid
+    repo.path.write_text(json.dumps(rows))
+    loaded = repo.list()[0]
+    date = loaded.published if is_episode else loaded.feed.updated
+    assert date.isoformat() == expected
+
+    target[key] = invalid
+    before = json.dumps(rows).encode()
+    repo.path.write_bytes(before)
+    diagnostic = (
+        f"Cannot read metadata {repo.path}: invalid schema: "
+        f"{field} is outside the UTC date range"
+    )
+    with pytest.raises(StoreReadError) as read:
+        repo.list()
+    assert str(read.value) == diagnostic
+    with pytest.raises(StoreReadError) as write:
+        repo.add(model)
+    assert str(write.value) == diagnostic
+    assert repo.path.read_bytes() == before

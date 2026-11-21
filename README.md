@@ -90,6 +90,9 @@ Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
 convention; explicitly offset timestamps are converted to UTC. Existing naive
 values cannot recover any historical host DST conversion error.
+If a stored offset would move a timestamp outside years 1 through 9999 in
+UTC, the metadata error names `published` or `feed.updated`. Correct that
+field in the named store or restore a trusted backup before retrying.
 
 Repeated GUIDs are rejected before publication, including identical repeated
 entries. Stored episode/subscription rows and incoming repository batches must

@@ -32,7 +32,15 @@ from xml.sax import SAXParseException
 import feedparser
 import httpx
 from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
-from pydantic import BaseModel, ValidationError, conint, constr, parse_obj_as, validator
+from pydantic import (
+    BaseModel,
+    PydanticValueError,
+    ValidationError,
+    conint,
+    constr,
+    parse_obj_as,
+    validator,
+)
 
 from .config import settings
 from .download import DownloadError
@@ -239,11 +247,19 @@ def advisory_lock(path, *, directory_fd=None):
             )
 
 
+class _UTCDateRangeError(PydanticValueError):
+    code = "utc_date_range"
+    msg_template = "date is outside the UTC date range"
+
+
 def as_utc(value):
     """Legacy naive storage values represent UTC."""
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+    try:
+        return value.astimezone(timezone.utc)
+    except OverflowError:
+        raise _UTCDateRangeError() from None
 
 
 def parsed_date(value):
@@ -640,7 +656,19 @@ class JsonRepository:
             raise StoreReadError(self.path, "invalid JSON") from None
         try:
             models = parse_obj_as(list[self.storage_model_type], values)
-        except (ValidationError, RecursionError, OverflowError):
+        except ValidationError as error:
+            for issue in error.errors():
+                if issue["type"] == "value_error.utc_date_range":
+                    field = {"published": "published", "updated": "feed.updated"}.get(
+                        issue["loc"][-1]
+                    )
+                    if field:
+                        raise StoreReadError(
+                            self.path,
+                            f"invalid schema: {field} is outside the UTC date range",
+                        ) from None
+            raise StoreReadError(self.path, "invalid schema") from None
+        except (RecursionError, OverflowError):
             raise StoreReadError(self.path, "invalid schema") from None
         return index_unique(models, lambda model: model.pk)
 
