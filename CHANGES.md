@@ -1,5 +1,8 @@
 # Unreleased
 
+* Parse the filename pattern once per subscription destination scan while
+  checking the byte limit and path of every generated name.
+
 * Report shared episode directories even when all affected subscriptions have
   explicitly saved paths, and refuse downloads for those subscriptions.
 

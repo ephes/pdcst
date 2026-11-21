@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 import pdcst
+from pdcst import models
 from pdcst.models import FilenamePatternError
 from pdcst.repository import EpisodeRepository, PodcastRepository
 
@@ -74,3 +75,40 @@ def test_unique_plan_retains_download_ownership(
     rows = episodes.list()
     assert [r.index for r in rows] == [1, 2]
     assert [r.audio_file for r in rows] == ["1.mp3", None]
+
+
+def test_subscription_scan_parses_once_and_readmits_changed_pattern(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    parsed = []
+
+    class CountingFormatter(models.Formatter):
+        def parse(self, pattern):
+            parsed.append(pattern)
+            return super().parse(pattern)
+
+    monkeypatch.setattr(models, "Formatter", CountingFormatter)
+    episodes = []
+    for index in range(128):
+        item = deepcopy(episode)
+        item.guid = f"episode-{index:03}"
+        item.title = f"Synthetic episode {index}"
+        item.audio_url = f"https://example.test/{index}.mp3"
+        episodes.append(item)
+
+    class Parser:
+        def get(self, _feed_url, _directory, pattern):
+            podcast.file_name_pattern = pattern
+            return podcast, episodes
+
+    pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser())
+    assert parsed == ["{index}.mp3"]
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+
+    # The changed pattern is admitted again and every rendered name is bounded.
+    episodes[-1].title = "é" * 128
+    with pytest.raises(FilenamePatternError, match="filename bytes"):
+        pdcst.subscribe(podcast.feed.url, "{title}.{file_format}", None, Parser())
+    assert parsed == ["{index}.mp3", "{title}.{file_format}"]
+    assert {path: path.read_bytes() for path in before} == before
