@@ -402,7 +402,10 @@ pathname interface.
 
 Downloads require an HTTP success response and follow at most five redirects.
 Redirect responses are closed without reading their bodies. Relative locations,
-cookies and authorization headers follow HTTPX's redirect rules. All hops and
+cookies and authorization headers follow HTTPX's redirect rules. If HTTPX
+prepares the next request within the redirect limit, a response-close failure
+logs a warning without URL details and the download continues. A redirect
+without a prepared request fails with `DownloadError`. All hops and
 the final body share one elapsed deadline; only the final body is retained and
 counted against the audio byte limit.
 Audio progress updates are spaced at least a tenth of a second apart during

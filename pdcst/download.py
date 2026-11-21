@@ -62,6 +62,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
             # Automatic redirects read discarded bodies even with stream=True.
             response = client.send(request, stream=True)
             response_failed = close_failed = False
+            next_request = None
             try:
                 check_deadline()
                 if response.has_redirect_location:
@@ -70,7 +71,10 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                             "Exceeded audio redirect limit", request=request
                         )
                     # HTTPX resolves locations and applies cookie/auth header rules.
-                    request = response.next_request
+                    next_request = response.next_request
+                    if next_request is None:
+                        raise DownloadError("Audio redirect did not prepare a request")
+                    request = next_request
                     continue
                 response.raise_for_status()
                 if response.status_code != 200 or "Content-Range" in response.headers:
@@ -147,11 +151,13 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                 try:
                     response.close()
                 except Exception:
-                    if not (response_failed or published):
+                    if not (response_failed or published or next_request is not None):
                         raise
                     close_failed = True
                 if published and close_failed:
                     logger.warning("Audio transferred; response close failed")
+                elif next_request is not None and close_failed and not response_failed:
+                    logger.warning("Audio redirect accepted; response close failed")
     except BaseException:
         transfer_failed = True
         raise

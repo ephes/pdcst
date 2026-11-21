@@ -1,5 +1,8 @@
 # Unreleased
 
+* Continue audio redirects with a prepared next request when closing the
+  redirect response fails, and log a warning without URL details.
+
 * Return the completed audio path when closing the HTTP client fails after
   publication, and preserve any earlier transfer error during client cleanup.
 
