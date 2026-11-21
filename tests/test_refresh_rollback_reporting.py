@@ -136,9 +136,10 @@ def test_download_directory_sync_failure_reports_target_outcome(
     repo.add(episode)
     before = repo.path.read_bytes()
     sync = os.fsync
+    target_parent = tmp_path.stat()
 
     def fsync(fd):
-        if stat.S_ISDIR(os.fstat(fd).st_mode):
+        if os.path.samestat(os.fstat(fd), target_parent):
             raise OSError("synthetic directory sync")
         sync(fd)
 

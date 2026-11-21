@@ -1,5 +1,8 @@
 # Unreleased
 
+* Sync new episode directory links before publication and retry parent syncs
+  for directories left behind by a failed attempt.
+
 * Cap `PDCST_LOCK_WAIT_SECONDS` at 86,400 seconds (24 hours), retaining
   support for positive fractional waits.
 

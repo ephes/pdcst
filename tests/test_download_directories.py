@@ -214,3 +214,67 @@ def test_unusable_parent_reports_bounded_store_error(tmp_path):
     plain.write_bytes(b"not a directory")
     with pytest.raises(StoreReadError):
         repository.EpisodeRepository(plain / "episodes").all
+
+
+def test_download_retries_unsynced_episode_directory_link(
+    tmp_path, episode, monkeypatch
+):
+    from pdcst import storage
+
+    root = tmp_path.resolve()
+    source = repository.EpisodeRepository(root)
+    episode.audio_url = "https://example.com/audio.mp3"
+    source.add(episode)
+    metadata = source.path.read_bytes()
+    parent = root / "shows"
+    destination = parent / "episodes"
+    target = destination / "saved.mp3"
+    events = []
+    fail_sync = True
+    mkdir = os.mkdir
+    sync = storage.sync_directory
+    root_info = root.stat()
+
+    def create(name, *args, **kwargs):
+        mkdir(name, *args, **kwargs)
+        events.append(("mkdir", name))
+        if name == destination.name:
+            # Simulate an episode catalog supplied by another writer.
+            (destination / source.name).write_bytes(metadata)
+
+    def sync_link(path, *, directory_fd=None):
+        info = os.fstat(directory_fd)
+        if (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino):
+            events.append(("sync", root.name))
+            if fail_sync:
+                raise OSError("synthetic parent sync failure")
+        elif parent.exists() and os.path.samestat(info, parent.stat()):
+            events.append(("sync", parent.name))
+        sync(path, directory_fd=directory_fd)
+
+    def transfer(url, stage, *, directory_fd):
+        events.append(("transfer", stage.parent.name))
+        _transfer(url, stage, directory_fd=directory_fd)
+
+    monkeypatch.setattr(os, "mkdir", create)
+    monkeypatch.setattr(storage, "sync_directory", sync_link)
+
+    repo = repository.EpisodeRepository(destination)
+    with pytest.raises(DownloadConflict, match="directory sync failed"):
+        repo.download_episode(episode, target.name, transfer)
+    assert events == [("mkdir", parent.name), ("sync", root.name)]
+    assert parent.is_dir()
+    assert not destination.exists()
+
+    events.clear()
+    fail_sync = False
+    retry = repository.EpisodeRepository(destination)
+    assert retry.download_episode(episode, target.name, transfer) == target
+    assert events == [
+        ("sync", root.name),
+        ("mkdir", destination.name),
+        ("sync", parent.name),
+        ("transfer", destination.name),
+    ]
+    assert target.read_bytes() == b"completed audio"
+    assert retry.list()[0].audio_file == target.name

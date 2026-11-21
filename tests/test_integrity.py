@@ -155,11 +155,17 @@ def test_repository_failure_preserves_bytes(tmp_path, podcast, monkeypatch, fail
 
     if failure == "serialize":
         monkeypatch.setattr(repo.storage_model_list_type, "json", fail)
+    elif failure == "flush":
+        fsync = os.fsync
+
+        def fail_file_sync(fd):
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                fail()
+            fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", fail_file_sync)
     else:
-        monkeypatch.setattr(
-            "pdcst.storage.os." + ("fsync" if failure == "flush" else "replace"),
-            fail,
-        )
+        monkeypatch.setattr(os, "replace", fail)
     with pytest.raises(OSError, match="injected"):
         repo.add(podcast)
     assert repo.path.read_bytes() == old
