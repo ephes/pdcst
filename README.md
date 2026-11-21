@@ -182,6 +182,9 @@ title, including when the store is empty, also exits with status 2 and reports
 `No matching podcast`. A matching subscription with no episodes succeeds with
 no output. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
+If the selected episode directory cannot be resolved safely, `episodes` exits
+with status 2 and a directory diagnostic. Check the subscription directory and
+its symlink targets under `PDCST_HOME`.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.

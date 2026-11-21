@@ -1,5 +1,8 @@
 # Unreleased
 
+* Report an unavailable or unsafe episode directory as a CLI error when listing
+  episodes.
+
 * Continue audio redirects with a prepared next request when closing the
   redirect response fails, and log a warning without URL details.
 
