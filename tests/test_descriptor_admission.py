@@ -225,6 +225,50 @@ def test_interrupted_lock_wait_closes_descriptor(tmp_path, monkeypatch):
     assert closed == descriptors
 
 
+@pytest.mark.parametrize("outcome", ["refused", "failed", "completed"])
+def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, outcome):
+    import pdcst.repository as module
+
+    lock = tmp_path / "podcasts.json.lock"
+    catalog = tmp_path / "podcasts.json"
+    attempts = []
+    real_close = os.close
+    failure = ValueError("synthetic catalog publication failure")
+
+    def failing_close(descriptor):
+        attempts.append(descriptor)
+        real_close(descriptor)
+        raise OSError("synthetic close failure")
+
+    def publish():
+        with module.advisory_lock(lock):
+            if outcome == "failed":
+                raise failure
+            assert outcome == "completed"
+            catalog.write_bytes(b"[]")
+
+    monkeypatch.setattr(module.os, "close", failing_close)
+    if outcome == "refused":
+
+        def refuse(*args):
+            raise OSError("synthetic flock failure")
+
+        monkeypatch.setattr(module.fcntl, "flock", refuse)
+        with pytest.raises(
+            module.StoreWriteError, match="regular stable file required"
+        ):
+            publish()
+    elif outcome == "failed":
+        with pytest.raises(ValueError) as raised:
+            publish()
+        assert raised.value is failure
+    else:
+        with pytest.warns(RuntimeWarning, match="lock release uncertain"):
+            publish()
+        assert catalog.read_bytes() == b"[]"
+    assert len(attempts) == 1
+
+
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
 def test_lock_wait_configuration_rejects_invalid_duration(tmp_path, value):
     from pydantic import ValidationError

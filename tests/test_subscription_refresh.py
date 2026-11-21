@@ -757,6 +757,32 @@ def test_refresh_aborts_on_indeterminate_retained_audio_stat(
     assert saved.read_bytes() == b"synthetic audio"
 
 
+def test_listing_keeps_legacy_directory_loop_local(tmp_path, monkeypatch, podcast):
+    shows = PodcastRepository(tmp_path)
+    podcast.title = "Synthetic Show!"
+    podcast.directory = None
+    other = copy.deepcopy(podcast)
+    other.title = "Healthy Show"
+    other.feed.url = "https://example.test/other"
+    (tmp_path / "healthy_show").mkdir()
+    shows.add_list([podcast, other])
+    before = shows.path.read_bytes()
+    real_contained_path = pdcst.contained_path
+
+    def contained_path(root, *parts):
+        if parts == ("synthetic_show!",):
+            raise RuntimeError("synthetic symlink loop")
+        return real_contained_path(root, *parts)
+
+    monkeypatch.setattr(pdcst, "contained_path", contained_path)
+    listed = {item.feed.url: item for item in pdcst.list_all_podcasts(shows)}
+    assert set(listed) == {podcast.feed.url, other.feed.url}
+    assert listed[podcast.feed.url].directory == "synthetic_show_"
+    assert listed[other.feed.url].directory == "healthy_show"
+    assert all(stored.directory is None for stored in shows.all.values())
+    assert shows.path.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "other_directory,legacy_first",
     [(None, True), ("SYNTHETIC_SHOW", True), ("SYNTHETIC_SHOW", False)],

@@ -190,6 +190,8 @@ using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
+If a legacy lookup encounters a symlink loop, the subscription stays unpinned
+and the catalog listing continues.
 A directory shared by multiple feeds is refused for both explicitly saved and
 legacy directories. Ownership uses resolved paths, NFC normalization and case
 folding. The `podcasts` command fails and names the affected subscriptions by
@@ -594,6 +596,9 @@ monotonic clock; expiry raises `StoreWriteError` with a busy/retry diagnostic
 and closes the descriptor. Retry the command after the other writer finishes,
 or increase the limit for intentionally long operations. Already held locks
 remain held for their operation; the limit bounds waiting, not operation time.
+A lock descriptor close is attempted once. If it fails during another error,
+the original error is reported. After a completed operation, a runtime warning
+reports uncertain lock release. The close warning alone requires no repeat write.
 Do not remove any lock file while commands are running. Failed serialization
 or writes before replacement leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. If the staging descriptor fails

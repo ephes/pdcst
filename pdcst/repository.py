@@ -214,9 +214,22 @@ def advisory_lock(path, *, directory_fd=None):
                 f"Cannot acquire lock {path}: regular stable file required"
             ) from None
         yield
-    finally:
+    except BaseException:
         if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass  # Preserve the admission or operation failure.
+        raise
+    else:
+        try:
             os.close(descriptor)
+        except OSError:
+            warnings.warn(
+                f"Operation completed; lock release uncertain for {path}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 def as_utc(value):
@@ -1471,7 +1484,7 @@ class PodcastRepository(JsonRepository):
             legacy = stored.title.lower().replace(" ", "_")
             try:
                 path = contained_path(self.base_dir, legacy)
-            except ValueError:
+            except (ValueError, RuntimeError):
                 return podcast
             if path.is_dir():
                 podcast.directory = legacy

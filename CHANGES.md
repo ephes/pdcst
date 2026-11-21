@@ -1,5 +1,11 @@
 # Unreleased
 
+* Keep subscriptions visible when a legacy directory lookup encounters a
+  symlink loop, without saving a directory to the catalog.
+
+* Preserve admission and publication errors if closing an advisory lock also
+  fails. Warn about uncertain lock release after a completed operation.
+
 * Parse the filename pattern once per subscription destination scan while
   checking the byte limit and path of every generated name.
 
