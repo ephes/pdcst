@@ -3,8 +3,10 @@ pdcst is a little podcast command line utility to show
 new episodes and download audio files.
 """
 
+import re
 import unicodedata
 from pathlib import Path, PureWindowsPath
+from urllib.parse import urlsplit
 
 import typer
 
@@ -35,19 +37,56 @@ cli = typer.Typer()
 _TERMINAL_UNSAFE_FORMATS = frozenset(
     "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
 )
+_PODCAST_LINE_MAX_CHARS = 160
+
+
+def _terminal_character(char: str) -> str:
+    if (
+        unicodedata.category(char) in {"Cc", "Zl", "Zp"}
+        or char in _TERMINAL_UNSAFE_FORMATS
+    ):
+        return f"\\u{ord(char):04x}"
+    return char
 
 
 def terminal_text(value) -> str:
     """Escape control, line-separator and bidi-override characters for display."""
-    return "".join(
-        (
-            f"\\u{ord(char):04x}"
-            if unicodedata.category(char) in {"Cc", "Zl", "Zp"}
-            or char in _TERMINAL_UNSAFE_FORMATS
-            else char
-        )
-        for char in str(value)
-    )
+    return "".join(_terminal_character(char) for char in str(value))
+
+
+def _terminal_title_preview(title: str, budget: int) -> str:
+    remaining = budget
+    parts = []
+    for index, char in enumerate(title[:budget], start=1):
+        escaped = _terminal_character(char)
+        # Reserve space for the omission marker while more input remains.
+        available = remaining - (1 if index < len(title) else 0)
+        if len(escaped) > available:
+            parts.append("…")
+            break
+        parts.append(escaped)
+        remaining -= len(escaped)
+    return "".join(parts)
+
+
+def _feed_origin(feed_url: str) -> str:
+    """Return only the scheme, hostname and optional port of a stored feed."""
+    unavailable = "feed origin unavailable"
+    try:
+        url = urlsplit(feed_url)
+        host, port = url.hostname, url.port
+    except ValueError:
+        return unavailable
+    if (
+        url.scheme not in {"http", "https"}
+        or not host
+        or "\\" in url.netloc
+        or not re.fullmatch(r"[\w.:-]+", host)
+    ):
+        return unavailable
+    if url.netloc.rsplit("@", 1)[-1].startswith("["):
+        host = f"[{host}]"
+    return f"{url.scheme}://{host}" + (f":{port}" if port is not None else "")
 
 
 def contained_path(root, *parts):
@@ -205,7 +244,14 @@ def list_all_episodes(podcast) -> list[Episode]:
     """
     List all episodes for a podcast.
     """
-    episodes_repo = EpisodeRepository(contained_path(settings.root, podcast.directory))
+    try:
+        directory = contained_path(settings.root, podcast.directory)
+    except (OSError, RuntimeError, ValueError):
+        raise StoreReadError(
+            Path(EpisodeRepository.name),
+            "podcast episode directory is unavailable or unsafe",
+        ) from None
+    episodes_repo = EpisodeRepository(directory)
     return episodes_repo.list(additional_attributes={"podcast": podcast})
 
 
@@ -299,7 +345,7 @@ def list_podcasts():
         all_podcasts = list_all_podcasts()
     except SharedDirectoryError as error:
         feeds = "; ".join(
-            f"{terminal_text(podcast.title)} <{terminal_text(podcast.feed.url)}>"
+            f"{terminal_text(podcast.title)} <{_feed_origin(podcast.feed.url)}>"
             for podcast in error.shared
         )
         raise typer.BadParameter(
@@ -309,7 +355,9 @@ def list_podcasts():
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:
-        print(terminal_text(podcast))
+        suffix = f" - {podcast.episodes_count} episodes"
+        budget = max(1, _PODCAST_LINE_MAX_CHARS - len(suffix))
+        print(_terminal_title_preview(podcast.title, budget) + suffix)
 
 
 @cli.command(name="episodes")

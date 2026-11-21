@@ -1,6 +1,7 @@
 """Download audio without publishing incomplete or unsuccessful responses."""
 
 import logging
+from contextlib import suppress
 from pathlib import Path
 from time import monotonic
 
@@ -23,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 class DownloadError(ValueError):
     """An expected audio acquisition failure with a private, bounded diagnostic."""
+
+
+def _warn_cleanup_failure(message: str) -> None:
+    # A broken logging handler must not change the transfer outcome.
+    with suppress(Exception):
+        logger.warning(message)
 
 
 def download_with_progress(url, target_path, *, directory_fd=None):
@@ -155,9 +162,11 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         raise
                     close_failed = True
                 if published and close_failed:
-                    logger.warning("Audio transferred; response close failed")
+                    _warn_cleanup_failure("Audio transferred; response close failed")
                 elif next_request is not None and close_failed and not response_failed:
-                    logger.warning("Audio redirect accepted; response close failed")
+                    _warn_cleanup_failure(
+                        "Audio redirect accepted; response close failed"
+                    )
     except BaseException:
         transfer_failed = True
         raise
@@ -166,7 +175,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
             client.close()
         except Exception:
             if published:
-                logger.warning("Audio transferred; HTTP client close failed")
+                _warn_cleanup_failure("Audio transferred; HTTP client close failed")
             elif not transfer_failed:
                 raise
     return target_path

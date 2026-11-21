@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 import pdcst
 from pdcst.models import Episode, Feed, Podcast
@@ -206,6 +207,30 @@ def test_episodes_no_matching_show_reports_error(browsing_store):
     assert "No matching podcast" in result["output"]
     assert "Traceback" not in result["output"]
     assert result["opened"] == result["episodes"] == []
+
+
+def test_episodes_reports_directory_refused_after_selection(
+    browsing_store, monkeypatch
+):
+    monkeypatch.setattr(pdcst.settings, "root", browsing_store)
+    select = pdcst.find_podcast_by_identifier
+
+    def select_then_change_directory(*args, **kwargs):
+        podcast = select(*args, **kwargs)
+        directory = browsing_store / podcast.directory
+        directory.rename(browsing_store / "previous")
+        directory.symlink_to(browsing_store.parent, target_is_directory=True)
+        return podcast
+
+    monkeypatch.setattr(
+        pdcst, "find_podcast_by_identifier", select_then_change_directory
+    )
+    result = CliRunner().invoke(pdcst.cli, ["episodes", "Amber Observatory"])
+
+    assert result.exit_code == 2, result.exception
+    assert "episodes.json" in result.output
+    assert "unavailable or unsafe" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_episodes_empty_store_reports_error(tmp_path):

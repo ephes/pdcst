@@ -1,5 +1,17 @@
 # Unreleased
 
+* Continue accepted redirects and associate completed audio even when a logging
+  handler fails while reporting an HTTP cleanup warning.
+
+* Shorten long podcast titles to fit the listing's display budget, keeping
+  control-character escapes intact and matching against the full stored titles.
+
+* Identify subscriptions sharing an episode directory by title and feed origin,
+  omitting private URL components from CLI diagnostics.
+
+* Report an unavailable or unsafe episode directory as a CLI error when listing
+  episodes.
+
 * Continue audio redirects with a prepared next request when closing the
   redirect response fails, and log a warning without URL details.
 

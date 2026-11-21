@@ -1,10 +1,13 @@
 """Feed-supplied text must not reach the terminal as control sequences."""
 
+from copy import deepcopy
+
 import httpx
 import pytest
 from typer.testing import CliRunner
 
 import pdcst
+from pdcst.repository import EpisodeRepository, PodcastRepository
 
 # XML 1.0 admits CR/LF/TAB and C1 controls as character references. feedparser
 # maps most C1 references to cp1252, but keeps U+0081/8D/8F/90/9D (RI, DCS,
@@ -82,6 +85,40 @@ def test_podcasts_escapes_stored_titles(subscribed):
     assert result.exit_code == 0, result.output
     assert_inert(result.output)
     assert result.output.splitlines() == [f"{SHOW_TEXT} - 2 episodes"]
+
+
+@pytest.mark.parametrize(
+    "title,preview",
+    [
+        ("A" * 5000, "A" * 146 + "…"),
+        ("A" + "\x9d" * 50, "A" + "\\u009d" * 24 + "…"),
+        ("A" * 141 + "\x9d", "A" * 141 + "\\u009d"),
+    ],
+)
+def test_podcasts_bounds_display_and_episodes_uses_exact_title(
+    tmp_path, monkeypatch, podcast, episode, title, preview
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = title
+    archive = deepcopy(podcast)
+    archive.title += " Archive"
+    archive.directory = "archive"
+    archive.feed.url = "https://example.test/archive"
+    shows = PodcastRepository(tmp_path)
+    shows.add_list([archive, podcast])
+    EpisodeRepository(tmp_path / podcast.directory).add(episode)
+    runner = CliRunner()
+
+    result = runner.invoke(pdcst.cli, ["podcasts"])
+    assert result.exit_code == 0, result.output
+    assert_inert(result.output)
+    archive_line, show_line = result.output.splitlines()
+    assert show_line == f"{preview} - 3 episodes"
+    assert len(archive_line) <= 160
+
+    result = runner.invoke(pdcst.cli, ["episodes", title])
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{episode.title}\n"
 
 
 def test_episodes_escapes_stored_titles(subscribed):

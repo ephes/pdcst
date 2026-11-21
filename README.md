@@ -182,6 +182,9 @@ title, including when the store is empty, also exits with status 2 and reports
 `No matching podcast`. A matching subscription with no episodes succeeds with
 no output. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
+If the selected episode directory cannot be resolved safely, `episodes` exits
+with status 2 and a directory diagnostic. Check the subscription directory and
+its symlink targets under `PDCST_HOME`.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
@@ -189,7 +192,10 @@ For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
 A legacy directory mapping that shares a resolved directory with another feed
 under NFC normalization and case folding is refused: `podcasts` fails and names
-the affected feeds (escaped like other output), and `episodes`/`download` refuse
+the affected subscriptions by escaped title and HTTP(S) origin (scheme, host,
+and optional port). Feed credentials, paths, queries, and fragments are omitted.
+If an origin cannot be parsed, the CLI displays `feed origin unavailable`.
+The `episodes` and `download` commands refuse
 those feeds while other subscriptions stay usable. The API raises
 `SharedDirectoryError` (a `StoreReadError` whose message contains no stored
 values; its `shared` and `podcasts` attributes hold the affected and all
@@ -200,7 +206,9 @@ Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
 line/paragraph separators and bidirectional override/isolate marks as visible
 `\uXXXX` escapes, so a feed cannot rewrite, hide or reorder terminal output or add
-lines to a listing. Stored titles keep their original text, and title matching for
+lines to a listing. `podcasts` uses a 160-character display budget for the title
+and episode count together. It marks shortened titles with `…` and keeps
+each escape intact. Stored titles keep their original text, and title matching for
 `episodes` and `download` uses that original text. Library callers that print
 `Podcast`/`Episode` objects themselves can use `pdcst.terminal_text()`.
 
@@ -433,6 +441,8 @@ Response and HTTP client close failures leave an earlier transfer or replacement
 error intact. After successful audio publication, either close failure produces
 a warning without response or URL details, and the transfer returns the output
 path.
+Cleanup warnings are best effort. A logging handler failure leaves an accepted
+redirect in progress and allows completed audio to be associated with its episode.
 Missing or malformed Content-Length (including non-ASCII digits) uses
 indeterminate progress. ASCII decimal lengths are compared to the byte budget
 before integer conversion, ignoring leading zeros; arbitrarily large declared
