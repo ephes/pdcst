@@ -244,15 +244,17 @@ in one pass. Browsing stops matching at the first substring match.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
 The first successful download for a legacy subscription saves the selected
-directory in `podcasts.json`. It holds the subscription lock from directory
-selection through publication while the directory still needs to be saved. If
-another command saves a directory before the download reloads the subscription,
-the download uses that directory and releases the subscription lock before
-transfer. A directory selected for migration that is reserved for
-repository storage or already used by another feed is refused before any
-transfer starts; set a distinct directory in `podcasts.json` instead. Later
-commands use the saved directory even if the other directory appears. If audio is saved but updating the subscription
-fails, use the reported directory to repair `podcasts.json` before retrying.
+directory in `podcasts.json`. Migration holds the per-feed lock through
+transfer and pinning. The catalog writer lock is held briefly to check ownership
+before transfer and again to reload the latest catalog, recheck ownership and
+save the pin. Other feeds can publish during the transfer. If another command
+has already pinned the subscription, the download uses its saved directory.
+A directory selected for migration that is reserved for repository storage or
+already used by another feed is refused before transfer. If the subscription
+changes or another feed claims the directory during transfer, the pin is refused
+and the command reports where the audio was saved. Resolve the conflict before
+retrying. Later commands use a saved directory even if an alternate legacy
+directory appears.
 
 # Contribute
 

@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -142,6 +146,66 @@ def test_first_successful_download_freezes_legacy_directory(
     pdcst.download("synthetic", "refactor")
     assert (chosen / "saved.mp3").read_bytes() == b"synthetic audio"
     assert not list(competitor.iterdir())
+
+
+@pytest.mark.parametrize("conflicting_claim", [False, True])
+def test_legacy_transfer_releases_catalog_writer_and_rechecks_ownership(
+    tmp_path, monkeypatch, podcast, episode, conflicting_claim
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Synthetic Show"
+    podcast.directory = None
+    podcast.file_name_pattern = "saved.mp3"
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    chosen = tmp_path / "synthetic_show"
+    episode.audio_url = "https://example.test/episode.mp3"
+    EpisodeRepository(chosen).add(episode)
+    other_directory = chosen.name if conflicting_claim else "other_show"
+    other_url = "https://example.test/other.xml"
+
+    def transfer(url, stage, **kwargs):
+        # A separate process must finish its update before this transfer returns.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import sys
+from pathlib import Path
+from pdcst.models import Podcast
+from pdcst.repository import PodcastRepository
+
+shows = PodcastRepository(Path(sys.argv[1]))
+data = next(iter(shows.all.values())).dict()
+data["feed"]["url"] = sys.argv[2]
+data.update(title="Other Show", directory=sys.argv[3])
+shows.add(Podcast.from_dict(data))
+""",
+                str(tmp_path),
+                other_url,
+                other_directory,
+            ],
+            env={**os.environ, "PDCST_LOCK_WAIT_SECONDS": "0.2"},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    if conflicting_claim:
+        with pytest.raises(typer.BadParameter, match="already used by another feed"):
+            pdcst.download("synthetic", "refactor")
+    else:
+        pdcst.download("synthetic", "refactor")
+
+    assert shows.all[other_url].directory == other_directory
+    assert shows.all[podcast.feed.url].directory == (
+        None if conflicting_claim else chosen.name
+    )
+    assert (chosen / "saved.mp3").read_bytes() == b"synthetic audio"
 
 
 def _forbid_transfer(monkeypatch):
