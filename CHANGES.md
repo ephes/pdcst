@@ -1,5 +1,11 @@
 # Unreleased
 
+* Identify the stored `published` or `feed.updated` field when its offset
+  would place the timestamp outside the UTC date range.
+
+* Refuse nonfinite numbers in stored metadata JSON, including in ignored fields,
+  and enforce finite numbers when serializing metadata before replacement.
+
 * Sync ancestor directory links before direct audio downloads can publish.
   Existing search-only ancestors remain usable; missing directories are
   created only below a readable parent.

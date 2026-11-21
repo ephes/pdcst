@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from pdcst import repository
-from pdcst.repository import EpisodeRepository, PodcastRepository, StoreReadError
+from pdcst.repository import (
+    EpisodeRepository,
+    PodcastRepository,
+    StoreReadError,
+    StoreWriteError,
+)
 
 
 @pytest.mark.parametrize("field", ["guid", "audio_file", "url"])
@@ -58,6 +63,36 @@ def test_unique_unicode_members_and_identities_round_trip(tmp_path, episode):
     )
     assert repo.list()[0].title == episode.title
     assert repo.list()[0].guid == episode.guid
+
+
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e309", "-1e309"])
+def test_nonfinite_json_in_ignored_member_refused(tmp_path, episode, number):
+    repo = EpisodeRepository(tmp_path)
+    repo.add(episode)
+    rows = json.loads(repo.path.read_text())
+    rows[0]["extra"] = {"number": "NUMBER"}
+    template = json.dumps(rows).encode()
+    repo.path.write_bytes(template.replace(b'"NUMBER"', b"1e308"))
+    assert repo.list()[0].guid == episode.guid
+
+    before = template.replace(b'"NUMBER"', number.encode())
+    repo.path.write_bytes(before)
+    with pytest.raises(StoreReadError, match="invalid JSON"):
+        repo.list()
+    with pytest.raises(StoreReadError, match="invalid JSON"):
+        repo.add(episode)
+    assert repo.path.read_bytes() == before
+
+
+def test_nonfinite_serialization_preserves_previous_store(tmp_path, episode):
+    repo = EpisodeRepository(tmp_path)
+    repo.add(episode)
+    before = repo.path.read_bytes()
+    # Simulate a nonfinite value reaching the serializer in a storage model.
+    model = repo.all[episode.guid].copy(update={"extra": float("nan")})
+    with pytest.raises(StoreWriteError, match="invalid JSON"):
+        repo._write_models({model.pk: model})
+    assert repo.path.read_bytes() == before
 
 
 def test_missing_and_valid_store(tmp_path, episode):
@@ -173,7 +208,7 @@ def test_write_obeys_read_byte_ceiling(
     monkeypatch.setattr(
         repo.storage_model_list_type,
         "json",
-        lambda self: original_json(self, ensure_ascii=False),
+        lambda self, **kwargs: original_json(self, ensure_ascii=False, **kwargs),
     )
     encoded = repo.storage_model_list_type(__root__=[stored]).json().encode("utf-8")
     monkeypatch.setattr(repository, "STORE_MAX_BYTES", len(encoded) + headroom)

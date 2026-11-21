@@ -90,6 +90,9 @@ Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
 convention; explicitly offset timestamps are converted to UTC. Existing naive
 values cannot recover any historical host DST conversion error.
+If a stored offset would move a timestamp outside years 1 through 9999 in
+UTC, the metadata error names `published` or `feed.updated`. Correct that
+field in the named store or restore a trusted backup before retrying.
 
 Repeated GUIDs are rejected before publication, including identical repeated
 entries. Stored episode/subscription rows and incoming repository batches must
@@ -633,9 +636,11 @@ restore a regular JSON file at the named path before retrying. Nonregular files,
 oversize input, malformed JSON/schema and filesystem failures raise
 `StoreReadError` (`ValueError`) with the path and a trusted category, never stored
 record values. Repeated JSON object members are invalid JSON, including identical
-values, escaped spellings of the same name, nested feed fields and unknown fields;
-they are refused before model construction. Original bytes remain untouched for
-manual correction or recovery from a trusted backup. Every CLI command reports
+values, escaped spellings of the same name, nested feed fields and unknown fields.
+`NaN`, `Infinity`, `-Infinity` and numbers whose exponents overflow to infinity
+are also refused before model construction, even in ignored fields. Metadata
+writes refuse nonfinite numbers before replacement. Original bytes remain
+untouched for manual correction or recovery from a trusted backup. Every CLI command reports
 these failures concisely with a nonzero exit status. Restore/correct the named
 store (or repair its read permissions)
 before retrying; writing operations refuse unreadable existing stores and never

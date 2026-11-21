@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
+from math import isfinite
 from operator import itemgetter
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urljoin, urlsplit
@@ -31,7 +32,15 @@ from xml.sax import SAXParseException
 import feedparser
 import httpx
 from feedparser.exceptions import CharacterEncodingOverride, NonXMLContentType
-from pydantic import BaseModel, ValidationError, conint, constr, parse_obj_as, validator
+from pydantic import (
+    BaseModel,
+    PydanticValueError,
+    ValidationError,
+    conint,
+    constr,
+    parse_obj_as,
+    validator,
+)
 
 from .config import settings
 from .download import DownloadError
@@ -238,11 +247,19 @@ def advisory_lock(path, *, directory_fd=None):
             )
 
 
+class _UTCDateRangeError(PydanticValueError):
+    code = "utc_date_range"
+    msg_template = "date is outside the UTC date range"
+
+
 def as_utc(value):
     """Legacy naive storage values represent UTC."""
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+    try:
+        return value.astimezone(timezone.utc)
+    except OverflowError:
+        raise _UTCDateRangeError() from None
 
 
 def parsed_date(value):
@@ -281,6 +298,13 @@ def unique_json_object(pairs):
             raise ValueError("duplicate JSON member")
         result[key] = value
     return result
+
+
+def finite_json_float(token):
+    value = float(token)
+    if not isfinite(value):
+        raise ValueError("nonfinite JSON number")
+    return value
 
 
 class DownloadConflict(ValueError):
@@ -622,12 +646,29 @@ class JsonRepository:
         except UnicodeError:
             raise StoreReadError(self.path, "invalid UTF-8") from None
         try:
-            values = json.loads(decoded, object_pairs_hook=unique_json_object)
+            values = json.loads(
+                decoded,
+                object_pairs_hook=unique_json_object,
+                parse_constant=finite_json_float,
+                parse_float=finite_json_float,
+            )
         except (ValueError, RecursionError):
             raise StoreReadError(self.path, "invalid JSON") from None
         try:
             models = parse_obj_as(list[self.storage_model_type], values)
-        except (ValidationError, RecursionError, OverflowError):
+        except ValidationError as error:
+            for issue in error.errors():
+                if issue["type"] == "value_error.utc_date_range":
+                    field = {"published": "published", "updated": "feed.updated"}.get(
+                        issue["loc"][-1]
+                    )
+                    if field:
+                        raise StoreReadError(
+                            self.path,
+                            f"invalid schema: {field} is outside the UTC date range",
+                        ) from None
+            raise StoreReadError(self.path, "invalid schema") from None
+        except (RecursionError, OverflowError):
             raise StoreReadError(self.path, "invalid schema") from None
         return index_unique(models, lambda model: model.pk)
 
@@ -674,7 +715,12 @@ class JsonRepository:
 
     def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
-        serialized = models.json().encode("utf-8")
+        try:
+            serialized = models.json(allow_nan=False).encode("utf-8")
+        except ValueError:
+            raise StoreWriteError(
+                f"Cannot write metadata {self.path}: invalid JSON"
+            ) from None
         if len(serialized) > STORE_MAX_BYTES:
             raise StoreWriteError(
                 f"Cannot write metadata {self.path}: size limit exceeded (16 MiB)"
