@@ -37,19 +37,36 @@ cli = typer.Typer()
 _TERMINAL_UNSAFE_FORMATS = frozenset(
     "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
 )
+_PODCAST_LINE_MAX_CHARS = 160
+
+
+def _terminal_character(char: str) -> str:
+    if (
+        unicodedata.category(char) in {"Cc", "Zl", "Zp"}
+        or char in _TERMINAL_UNSAFE_FORMATS
+    ):
+        return f"\\u{ord(char):04x}"
+    return char
 
 
 def terminal_text(value) -> str:
     """Escape control, line-separator and bidi-override characters for display."""
-    return "".join(
-        (
-            f"\\u{ord(char):04x}"
-            if unicodedata.category(char) in {"Cc", "Zl", "Zp"}
-            or char in _TERMINAL_UNSAFE_FORMATS
-            else char
-        )
-        for char in str(value)
-    )
+    return "".join(_terminal_character(char) for char in str(value))
+
+
+def _terminal_title_preview(title: str, budget: int) -> str:
+    remaining = budget
+    parts = []
+    for index, char in enumerate(title[:budget], start=1):
+        escaped = _terminal_character(char)
+        # Reserve space for the omission marker while more input remains.
+        available = remaining - (1 if index < len(title) else 0)
+        if len(escaped) > available:
+            parts.append("…")
+            break
+        parts.append(escaped)
+        remaining -= len(escaped)
+    return "".join(parts)
 
 
 def _feed_origin(feed_url: str) -> str:
@@ -338,7 +355,9 @@ def list_podcasts():
     except (DuplicateIdentity, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for podcast in all_podcasts:
-        print(terminal_text(podcast))
+        suffix = f" - {podcast.episodes_count} episodes"
+        budget = max(1, _PODCAST_LINE_MAX_CHARS - len(suffix))
+        print(_terminal_title_preview(podcast.title, budget) + suffix)
 
 
 @cli.command(name="episodes")

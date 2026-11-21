@@ -1,5 +1,8 @@
 # Unreleased
 
+* Shorten long podcast titles to fit the listing's display budget, keeping
+  control-character escapes intact and matching against the full stored titles.
+
 * Identify subscriptions sharing an episode directory by title and feed origin,
   omitting private URL components from CLI diagnostics.
 
