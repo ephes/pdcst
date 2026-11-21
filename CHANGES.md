@@ -1,5 +1,8 @@
 # Unreleased
 
+* Continue accepted redirects and associate completed audio even when a logging
+  handler fails while reporting an HTTP cleanup warning.
+
 * Shorten long podcast titles to fit the listing's display budget, keeping
   control-character escapes intact and matching against the full stored titles.
 

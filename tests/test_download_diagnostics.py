@@ -1,6 +1,7 @@
 """Failed synthetic signed-URL downloads expose only bounded diagnostics."""
 
 import importlib
+import logging
 import traceback
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 import pdcst
-from pdcst.repository import EpisodeRepository
+from pdcst.repository import EpisodeRepository, PodcastRepository
 
 URL = (
     "https://USER_SECRET:PASS_SECRET@example.test/audio.mp3"
@@ -248,3 +249,66 @@ def test_client_close_failure_preserves_transfer_outcome(
     assert list(tmp_path.iterdir()) == [target]
     assert ("Audio transferred; HTTP client close failed" in caplog.text) == complete
     assert "QUERY_SECRET" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "cleanup,warning",
+    [
+        ("response", "Audio transferred; response close failed"),
+        ("redirect", "Audio redirect accepted; response close failed"),
+        ("client", "Audio transferred; HTTP client close failed"),
+    ],
+)
+def test_cleanup_warning_handler_failure_keeps_audio_association(
+    tmp_path, monkeypatch, podcast, episode, cleanup, warning
+):
+    module = importlib.import_module("pdcst.download")
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.file_name_pattern = "saved.mp3"
+    episode.audio_url = URL
+    PodcastRepository(tmp_path).add(podcast)
+    repo = EpisodeRepository(tmp_path / podcast.directory)
+    repo.add(episode)
+    warnings = []
+
+    class BrokenHandler(logging.Handler):
+        def emit(self, record):
+            warnings.append(record.getMessage())
+            raise OSError("synthetic warning sink failure")
+
+    class FailingCloseStream(httpx.ByteStream):
+        def close(self):
+            raise httpx.CloseError("synthetic response close failure")
+
+    class Transport(httpx.MockTransport):
+        def close(self):
+            if cleanup == "client":
+                raise httpx.CloseError("synthetic client close failure")
+
+    def respond(request):
+        if cleanup == "redirect" and request.url.path == "/audio.mp3":
+            return httpx.Response(
+                302,
+                headers={"Location": "/final.mp3"},
+                stream=FailingCloseStream(b"redirect body"),
+            )
+        stream = FailingCloseStream if cleanup == "response" else httpx.ByteStream
+        return httpx.Response(200, stream=stream(b"complete"))
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client", lambda **kw: client(transport=Transport(respond), **kw)
+    )
+    handler = BrokenHandler()
+    module.logger.addHandler(handler)
+    try:
+        result = CliRunner().invoke(
+            pdcst.cli, ["download", podcast.title, episode.title]
+        )
+    finally:
+        module.logger.removeHandler(handler)
+
+    assert warnings == [warning]
+    assert result.exit_code == 0, result.exception
+    assert (repo.base_dir / "saved.mp3").read_bytes() == b"complete"
+    assert repo.list()[0].audio_file == "saved.mp3"

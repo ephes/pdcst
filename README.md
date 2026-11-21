@@ -441,6 +441,8 @@ Response and HTTP client close failures leave an earlier transfer or replacement
 error intact. After successful audio publication, either close failure produces
 a warning without response or URL details, and the transfer returns the output
 path.
+Cleanup warnings are best effort. A logging handler failure leaves an accepted
+redirect in progress and allows completed audio to be associated with its episode.
 Missing or malformed Content-Length (including non-ASCII digits) uses
 indeterminate progress. ASCII decimal lengths are compared to the byte budget
 before integer conversion, ignoring leading zeros; arbitrarily large declared
