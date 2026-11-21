@@ -215,6 +215,22 @@ def _forbid_transfer(monkeypatch):
     monkeypatch.setattr(pdcst, "download_with_progress", forbidden)
 
 
+def test_legacy_subscription_without_episode_directory_reports_missing_episode(
+    tmp_path, monkeypatch, podcast
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Synthetic Show"
+    podcast.directory = None
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    original = shows.path.read_bytes()
+    _forbid_transfer(monkeypatch)
+    with pytest.raises(typer.BadParameter, match="^No matching episode$"):
+        pdcst.download("synthetic", "refactor")
+    assert shows.path.read_bytes() == original
+    assert not (tmp_path / "synthetic_show").exists()
+
+
 def test_legacy_pin_refuses_reserved_directory(tmp_path, monkeypatch, podcast):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     podcast.title = ".feed-locks"

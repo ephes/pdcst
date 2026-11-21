@@ -1575,7 +1575,9 @@ class PodcastRepository(JsonRepository):
                         locked._serialize_models(rows)
 
                 episodes = EpisodeRepository(resolved)
-                if stored.directory is not None:
+                if stored.directory is not None or not os.path.lexists(resolved):
+                    # A missing directory holds no episodes to select; selection
+                    # reports the missing episode and nothing is pinned.
                     yield current, episodes
                     return
 
