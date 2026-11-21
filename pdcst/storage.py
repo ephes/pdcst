@@ -135,6 +135,15 @@ _UNSYNCABLE_DIRECTORY = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ER
 _SEARCH_ONLY = getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)
 
 
+def _read_only_unsyncable(error, descriptor):
+    if error.errno not in _UNSYNCABLE_DIRECTORY:
+        return False
+    try:
+        return bool(os.fstatvfs(descriptor).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+
 def _open_component(name, parent, *, search_only_ok):
     flags = os.O_DIRECTORY | os.O_NOFOLLOW
     readable = True
@@ -162,7 +171,6 @@ def admitted_directory(
     create=True,
     parent_fd=None,
     label="Episode directory",
-    created_below=None,
 ):
     """Open components without following links and retain their identities.
 
@@ -175,8 +183,6 @@ def admitted_directory(
     parent link, including readable parents of already existing components so
     a retry can settle an interrupted creation. The final directory must be
     readable. The label names the admitted directory in error messages.
-    created_below names an absolute directory below which the caller has just
-    created the components itself; their parent syncs are never tolerated.
     """
     from pathlib import Path
 
@@ -201,13 +207,8 @@ def admitted_directory(
                 parts = relative.parts
             descriptors.append(descriptor)
             readable = True
-            new_from = len(parts)
-            if created_below is not None:
-                base = Path(os.path.abspath(created_below)).parts[1:]
-                new_from = len(base) if tuple(parts[: len(base)]) == base else 0
             for position, name in enumerate(parts):
                 search_only_ok = position < len(parts) - 1
-                created = position >= new_from
                 try:
                     child, child_readable = _open_component(
                         name, descriptor, search_only_ok=search_only_ok
@@ -219,7 +220,6 @@ def admitted_directory(
                         raise DirectoryAdmissionError(
                             f"{label} cannot be created below a search-only parent"
                         ) from None
-                    created = True
                     try:
                         os.mkdir(name, dir_fd=descriptor)
                     except FileExistsError:
@@ -235,9 +235,9 @@ def admitted_directory(
                     try:
                         sync_directory(None, directory_fd=descriptor)
                     except OSError as error:
-                        # Read-only or sync-less ancestors (squashfs, erofs)
-                        # cannot persist any link; only fail for a new one.
-                        if created or error.errno not in _UNSYNCABLE_DIRECTORY:
+                        # A read-only mount (squashfs, erofs) holds no link a
+                        # writer could have left behind, so nothing to settle.
+                        if not _read_only_unsyncable(error, descriptor):
                             raise DirectoryAdmissionError(
                                 f"{label}: parent directory sync failed; "
                                 "retry the operation"

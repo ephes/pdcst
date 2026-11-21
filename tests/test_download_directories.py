@@ -280,9 +280,9 @@ def test_download_retries_unsynced_episode_directory_link(
     assert retry.list()[0].audio_file == target.name
 
 
-@pytest.mark.parametrize("new_link", [False, True])
-def test_unsyncable_ancestor_fails_only_for_new_links(
-    tmp_path, episode, monkeypatch, new_link
+@pytest.mark.parametrize("read_only", [False, True])
+def test_unsyncable_parent_is_tolerated_only_on_read_only_mounts(
+    tmp_path, episode, monkeypatch, read_only
 ):
     import errno
 
@@ -293,27 +293,43 @@ def test_unsyncable_ancestor_fails_only_for_new_links(
     episode.audio_url = "https://example.com/audio.mp3"
     source.add(episode)
     destination = root / "episodes"
-    if not new_link:
-        destination.mkdir()
+    destination.mkdir()
+    (destination / source.name).write_bytes(source.path.read_bytes())
     sync = storage.sync_directory
+    fstatvfs = os.fstatvfs
     root_info = root.stat()
 
+    def is_root(fd):
+        info = os.fstat(fd)
+        return (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino)
+
     def sync_link(path, *, directory_fd=None):
-        info = os.fstat(directory_fd)
-        if (info.st_dev, info.st_ino) == (root_info.st_dev, root_info.st_ino):
+        if is_root(directory_fd):
             raise OSError(errno.EINVAL, "directory fsync unsupported")
         sync(path, directory_fd=directory_fd)
 
+    class Flags:
+        def __init__(self, result, flag):
+            self.result, self.f_flag = result, flag
+
+    def statvfs(fd):
+        result = fstatvfs(fd)
+        if read_only and is_root(fd):
+            return Flags(result, result.f_flag | os.ST_RDONLY)
+        return result
+
     monkeypatch.setattr(storage, "sync_directory", sync_link)
-    if not new_link:
-        (destination / source.name).write_bytes(source.path.read_bytes())
+    monkeypatch.setattr(os, "fstatvfs", statvfs)
     repo = repository.EpisodeRepository(destination)
-    if new_link:
-        with pytest.raises(DownloadConflict, match="directory sync failed"):
-            repo.download_episode(episode, "saved.mp3", _transfer)
-    else:
+    if read_only:
         assert (
             repo.download_episode(episode, "saved.mp3", _transfer)
             == destination / "saved.mp3"
         )
         assert (destination / "saved.mp3").read_bytes() == b"completed audio"
+    else:
+        # A writable mount may hold an unsynced link; retries stay refused.
+        for _ in range(2):
+            with pytest.raises(DownloadConflict, match="directory sync failed"):
+                repo.download_episode(episode, "saved.mp3", _transfer)
+        assert not (destination / "saved.mp3").exists()
