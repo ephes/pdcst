@@ -3,6 +3,7 @@ All the domain models for pdcst live here.
 """
 
 import re
+from functools import partial
 from pathlib import PureWindowsPath
 from string import Formatter
 from urllib.parse import urlsplit
@@ -183,8 +184,15 @@ class Podcast:
 
     def get_audio_file_name(self, episode):
         """Use the filename pattern to build a name for an episode's audio."""
+        return self.audio_filename_renderer()(episode)
+
+    def audio_filename_renderer(self):
+        """Compile the current filename pattern for a batch of episodes."""
         parts = self._filename_pattern_parts()
         fields = {field for _, field, _, _ in parts}
+        return partial(self._render_audio_file_name, parts, fields)
+
+    def _render_audio_file_name(self, parts, fields, episode):
         details = {}
         if "index" in fields:
             details["index"] = episode.index

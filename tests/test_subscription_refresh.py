@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
 import pdcst
 from pdcst.repository import (
@@ -787,6 +788,46 @@ def test_listing_refuses_shared_legacy_directory(
         pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
     with pytest.raises(StoreReadError, match="already used"):
         pdcst.list_all_podcasts(shows)
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize("command", ["podcasts", "episodes", "download"])
+def test_cli_refuses_shared_explicit_directory(
+    tmp_path, monkeypatch, podcast, episode, command
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = PodcastRepository(tmp_path)
+    podcast.directory = "synthetic_show"
+    podcast.file_name_pattern = "{index}.mp3"
+    other = copy.deepcopy(podcast)
+    other.title = "Other Show"
+    other.feed.url = "https://example.test/other"
+    other.directory = "SYNTHETIC_SHOW"
+    shows.add_list([podcast, other])
+    episodes = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_url = "https://example.test/audio.mp3"
+    episode.audio_file = "1.mp3"
+    episodes.add(episode)
+    saved = episodes.base_dir / episode.audio_file
+    saved.write_bytes(b"synthetic audio")
+    before = {path: path.read_bytes() for path in (shows.path, episodes.path, saved)}
+    transfers = []
+
+    monkeypatch.setattr(
+        pdcst, "download_with_progress", lambda *args, **kwargs: transfers.append(args)
+    )
+    args = [command]
+    if command != "podcasts":
+        args.append(podcast.title)
+    if command == "download":
+        args.append(episode.title)
+    result = CliRunner().invoke(pdcst.cli, args)
+    assert not transfers
+    assert result.exit_code == 2
+    assert "already used by another feed" in result.output
+    if command == "podcasts":
+        assert podcast.title in result.output
+        assert other.title in result.output
     assert {path: path.read_bytes() for path in before} == before
 
 

@@ -190,9 +190,10 @@ using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
-A legacy directory mapping that shares a resolved directory with another feed
-under NFC normalization and case folding is refused: `podcasts` fails and names
-the affected subscriptions by escaped title and HTTP(S) origin (scheme, host,
+A directory shared by multiple feeds is refused for both explicitly saved and
+legacy directories. Ownership uses resolved paths, NFC normalization and case
+folding. The `podcasts` command fails and names the affected subscriptions by
+escaped title and HTTP(S) origin (scheme, host,
 and optional port). Feed credentials, paths, queries, and fragments are omitted.
 If an origin cannot be parsed, the CLI displays `feed origin unavailable`.
 The `episodes` and `download` commands refuse
@@ -344,13 +345,14 @@ and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
 before metadata publication or audio transfer. Subscription preflight checks the
 entire retained inventory, including episodes absent from the current feed, after
-assigning stable indices. Generated filenames must be distinct under NFC Unicode
-normalization and case folding on every host. A collision refuses both metadata
-updates; use a pattern including `{index}`. Existing downloaded filenames remain
-associated without renaming. Both `add` and `download` report
-pattern failures as concise CLI errors. Formatting accepts the standard spec
-syntax with bounded numbers (every width/precision 0–255): an optional fill and
-alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,
+assigning stable indices. It parses the pattern once per scan and checks the
+byte limit and path of every generated filename. Filenames must be distinct
+under NFC Unicode normalization and case folding on every host. A collision
+refuses both metadata updates. Use a pattern including `{index}`. Existing
+downloaded filenames remain associated without renaming. Both `add` and
+`download` report pattern failures as concise CLI errors. Formatting accepts the
+standard spec syntax with bounded numbers (every width/precision 0–255): an
+optional fill and alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,
 grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`, `n` (not `c`);
 string fields accept width (not starting with `0`) and/or `.precision`,
 optionally followed by `s`. For example, `{index:03d}_{title:.100}.{file_format}`

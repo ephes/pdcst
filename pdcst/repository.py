@@ -124,7 +124,7 @@ class _StoreGenerationError(StoreReadError):
 
 
 class SharedDirectoryError(StoreReadError):
-    """Legacy subscriptions map to a directory another feed uses.
+    """Subscriptions map to a directory another feed uses.
 
     ``podcasts`` holds the full listing and ``shared`` the subscriptions
     involved; the message itself contains no stored values.
@@ -1484,22 +1484,16 @@ class PodcastRepository(JsonRepository):
             self._listed_podcast(stored, additional_attributes)
             for stored in self.all.values()
         ]
-        if not any(podcast._legacy_directory for podcast in podcasts):
-            return podcasts
-
         groups = {}
         for podcast in podcasts:
             try:
                 key = _subscription_directory_key(self.base_dir, podcast.directory)
-            except ValueError:
-                # Unsafe legacy paths cannot own a contained destination.
+            except (ValueError, RuntimeError):
+                # Path.resolve can raise RuntimeError for symlink loops on Python 3.10.
                 continue
             groups.setdefault(key, []).append(podcast)
         shared = [
-            podcast
-            for group in groups.values()
-            if len(group) > 1 and any(item._legacy_directory for item in group)
-            for podcast in group
+            podcast for group in groups.values() if len(group) > 1 for podcast in group
         ]
         if shared:
             raise SharedDirectoryError(self.path, podcasts, shared)
