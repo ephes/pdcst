@@ -1,5 +1,11 @@
 # Unreleased
 
+* Cap `PDCST_LOCK_WAIT_SECONDS` at 86,400 seconds (24 hours), retaining
+  support for positive fractional waits.
+
+* Refuse a lock with a busy/retry diagnostic if acquisition or the lock identity
+  check finishes at or after the admission deadline.
+
 * Keep subscriptions visible when a legacy directory lookup encounters a
   symlink loop, without saving a directory to the catalog.
 

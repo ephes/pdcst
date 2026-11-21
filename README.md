@@ -590,12 +590,14 @@ inode is checked again after acquisition. Invalid locks raise a bounded
 `StoreReadError` naming the marker, with the `StoreWriteError` as its cause; see
 "Interrupted-publication recovery".)
 Lock contention waits at most 30 seconds per acquisition by default. Set
-`PDCST_LOCK_WAIT_SECONDS` to a positive finite duration in seconds to change
-that limit (including for feed and download claim locks). The wait uses a
+`PDCST_LOCK_WAIT_SECONDS` to a duration greater than zero and at most 86,400
+seconds (24 hours) to change that limit for metadata, feed and download claim
+locks. Fractional seconds are supported. The wait uses a
 monotonic clock; expiry raises `StoreWriteError` with a busy/retry diagnostic
 and closes the descriptor. Retry the command after the other writer finishes,
 or increase the limit for intentionally long operations. Already held locks
-remain held for their operation; the limit bounds waiting, not operation time.
+remain held for their operation. The limit covers acquisition and the lock
+identity check before the operation starts.
 A lock descriptor close is attempted once. If it fails during another error,
 the original error is reported. After a completed operation, a runtime warning
 reports uncertain lock release. The close warning alone requires no repeat write.
