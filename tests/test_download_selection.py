@@ -288,6 +288,57 @@ def test_legacy_pin_identity_change_reports_saved_audio(
     assert shows.path.read_bytes() == original
 
 
+def test_legacy_pin_rechecks_audio_directory_after_catalog_stage_sync(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst import storage
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Synthetic Show"
+    podcast.directory = None
+    podcast.file_name_pattern = "saved.mp3"
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    original_catalog = shows.path.read_bytes()
+    chosen = tmp_path / "synthetic_show"
+    original_directory = tmp_path / "original"
+    episode.audio_url = "https://example.test/episode.mp3"
+    EpisodeRepository(chosen).add(episode)
+
+    def transfer(url, stage, **kwargs):
+        stage.write_bytes(b"synthetic audio")
+
+    write_models = PodcastRepository._write_models
+    fsync = storage.os.fsync
+
+    def write_with_directory_swap(self, rows):
+        def swap_after_sync(fd):
+            fsync(fd)
+            if not original_directory.exists():
+                assert (chosen / "saved.mp3").read_bytes() == b"synthetic audio"
+                chosen.rename(original_directory)
+                chosen.mkdir()
+                (chosen / "untouched").write_bytes(b"replacement directory")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(storage.os, "fsync", swap_after_sync)
+            return write_models(self, rows)
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    monkeypatch.setattr(PodcastRepository, "_write_models", write_with_directory_swap)
+    with pytest.raises(
+        typer.BadParameter,
+        match="Audio saved in .*subscription directory could not be saved",
+    ):
+        pdcst.download("synthetic", "refactor")
+
+    assert shows.path.read_bytes() == original_catalog
+    assert list(chosen.iterdir()) == [chosen / "untouched"]
+    assert (chosen / "untouched").read_bytes() == b"replacement directory"
+    assert (original_directory / "saved.mp3").read_bytes() == b"synthetic audio"
+    assert EpisodeRepository(original_directory).list()[0].audio_file == "saved.mp3"
+
+
 def test_concurrently_pinned_directory_releases_subscription_lock(
     tmp_path, monkeypatch, podcast, episode
 ):

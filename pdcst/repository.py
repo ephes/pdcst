@@ -691,10 +691,12 @@ class JsonRepository:
         serialized = self._serialize_models(locked)
         self._check_directory()
         with replacement_file(
-            self.path, binary=True, directory_fd=self._directory_fd
+            self.path,
+            binary=True,
+            directory_fd=self._directory_fd,
+            before_replace=self._check_directory,
         ) as output:
             output.write(serialized)
-            self._check_directory()
 
     def add(self, model):
         """Add a single model to the repository."""
@@ -886,6 +888,10 @@ class EpisodeRepository(JsonRepository):
     def download_episode(self, episode, name, transfer):
         """Transfer callbacks must use the supplied directory_fd for stage IO."""
         try:
+            if self._directory_fd is not None:
+                return self._download_in_directory(
+                    episode, name, transfer, self._check_directory
+                )
             with admitted_directory(self.base_dir) as (descriptor, check):
                 admitted = copy(self)
                 admitted._directory_fd = descriptor
@@ -1517,10 +1523,9 @@ class PodcastRepository(JsonRepository):
         current.directory = str(resolved.relative_to(self.base_dir.resolve()))
         return stored, current, resolved
 
-    def _check_legacy_directory_owner(self, rows, url, directory):
+    def _check_legacy_directory_owner(self, rows, url, target):
         from . import _subscription_directory_key
 
-        target = _subscription_directory_key(self.base_dir, directory)
         for other_url, other in rows.items():
             if other_url == url:
                 continue
@@ -1539,7 +1544,9 @@ class PodcastRepository(JsonRepository):
 
     @contextmanager
     def download_subscription(self, podcast):
-        """Pin the directory of a legacy subscription after a completed download."""
+        """Yield the selected podcast and any reselected episode repository."""
+        from . import _subscription_directory_key
+
         if not podcast._legacy_directory:
             yield podcast, None
             return
@@ -1551,7 +1558,7 @@ class PodcastRepository(JsonRepository):
                 admitted._fetch_all(), url
             )
             if stored.directory is not None:
-                yield current, resolved
+                yield current, EpisodeRepository(resolved)
                 return
 
             with admitted.feed_lock(url) as locked:
@@ -1562,40 +1569,48 @@ class PodcastRepository(JsonRepository):
                     )
                     directory = current.directory
                     if stored.directory is None:
-                        locked._check_legacy_directory_owner(rows, url, directory)
+                        target = _subscription_directory_key(locked.base_dir, directory)
+                        locked._check_legacy_directory_owner(rows, url, target)
                         rows[url] = stored.copy(update={"directory": directory})
                         locked._serialize_models(rows)
 
-                yield current, resolved
+                episodes = EpisodeRepository(resolved)
                 if stored.directory is not None:
+                    yield current, episodes
                     return
 
-                incomplete = (
-                    f"Audio saved in {resolved}, but the subscription directory "
-                    "could not be saved."
-                )
-                try:
-                    with locked._lock():
-                        rows = locked._fetch_all()
-                        if rows.get(url) != stored:
-                            raise DownloadConflict("Podcast subscription changed")
-                        locked._check_legacy_directory_owner(rows, url, directory)
-                        rows[url] = stored.copy(update={"directory": directory})
-                        locked._write_models(rows)
-                except PublicationDurabilityError:
-                    raise
-                except DownloadConflict as error:
-                    raise StoreWriteError(f"{incomplete} {error}") from None
-                except (
-                    OSError,
-                    StoreReadError,
-                    StoreWriteError,
-                    DirectoryAdmissionError,
-                ):
-                    raise StoreWriteError(
-                        f"{incomplete} Check local storage and set the directory "
-                        "in podcasts.json before retrying."
-                    ) from None
+                # Keep the directory used by the audio transfer admitted through pinning.
+                with episodes.admitted(create=False, parent=locked) as selected:
+                    yield current, selected
+                    incomplete = (
+                        f"Audio saved in {resolved}, but the subscription directory "
+                        "could not be saved."
+                    )
+                    try:
+                        with locked._lock():
+                            rows = locked._fetch_all()
+                            if rows.get(url) != stored:
+                                raise DownloadConflict("Podcast subscription changed")
+                            locked._check_legacy_directory_owner(rows, url, target)
+                            rows[url] = stored.copy(update={"directory": directory})
+                            pin = copy(locked)
+                            pin._check_directory = selected._check_directory
+                            pin._write_models(rows)
+                    except PublicationDurabilityError:
+                        raise
+                    except DownloadConflict as error:
+                        raise StoreWriteError(f"{incomplete} {error}") from None
+                    except (
+                        OSError,
+                        DuplicateIdentity,
+                        StoreReadError,
+                        StoreWriteError,
+                        DirectoryAdmissionError,
+                    ):
+                        raise StoreWriteError(
+                            f"{incomplete} Check local storage and set the directory "
+                            "in podcasts.json before retrying."
+                        ) from None
 
     name = "podcasts.json"
     storage_model_type = PodcastInDb

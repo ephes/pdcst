@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse a legacy directory pin if the episode directory changed after audio
+  publication, retaining the saved audio and metadata in the original directory.
+
 * Allow other subscriptions to publish while a legacy download transfers audio,
   and recheck directory ownership against the latest catalog before pinning.
 

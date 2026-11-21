@@ -253,8 +253,12 @@ A directory selected for migration that is reserved for repository storage or
 already used by another feed is refused before transfer. If the subscription
 changes or another feed claims the directory during transfer, the pin is refused
 and the command reports where the audio was saved. Resolve the conflict before
-retrying. Later commands use a saved directory even if an alternate legacy
-directory appears.
+retrying. The catalog also checks the admitted episode directory immediately
+before saving the pin. If that directory has moved or been replaced since the
+audio was saved, the command reports an incomplete pin. The completed audio
+and its episode metadata stay in the original directory. Restore the original
+layout and verify the saved files before retrying. Later commands use a saved
+directory even if an alternate legacy directory appears.
 
 # Contribute
 
