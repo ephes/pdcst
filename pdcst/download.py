@@ -1,6 +1,6 @@
 """Download audio without publishing incomplete or unsuccessful responses."""
 
-from contextlib import closing
+import logging
 from pathlib import Path
 from time import monotonic
 
@@ -18,6 +18,7 @@ MEDIA_TYPES = frozenset(AUDIO_MIME_EXTENSIONS) | {
     "binary/octet-stream",
 }
 PROGRESS_UPDATE_INTERVAL = 0.1
+logger = logging.getLogger(__name__)
 
 
 class DownloadError(ValueError):
@@ -57,7 +58,9 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
         for redirects in range(client.max_redirects + 1):
             request.extensions["timeout"] = httpx.Timeout(check_deadline()).as_dict()
             # Automatic redirects read discarded bodies even with stream=True.
-            with closing(client.send(request, stream=True)) as response:
+            response = client.send(request, stream=True)
+            transfer_failed = published = close_failed = False
+            try:
                 check_deadline()
                 if response.has_redirect_location:
                     if redirects == client.max_redirects:
@@ -102,7 +105,20 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         task = progress.add_task("Download", total=total)
                         next_update = monotonic() + PROGRESS_UPDATE_INTERVAL
                         check_deadline()
-                        for chunk in response.iter_raw():
+                        chunks = response.iter_raw()
+                        while True:
+                            was_closed = response.is_closed
+                            try:
+                                chunk = next(chunks, None)
+                            except Exception:
+                                # HTTPX marks the response closed before retiring
+                                # the stream at EOF, after yielding all bytes.
+                                if was_closed or not response.is_closed:
+                                    raise
+                                close_failed = True
+                                break
+                            if chunk is None:
+                                break
                             check_deadline()
                             if completed + len(chunk) > settings.audio_max_bytes:
                                 raise DownloadError(
@@ -120,5 +136,18 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         raise DownloadError("Empty audio response")
                     if total is not None and completed != total:
                         raise DownloadError("Incomplete media response")
+                published = True
                 break
+            except BaseException:
+                transfer_failed = True
+                raise
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    if not (transfer_failed or published):
+                        raise
+                    close_failed = True
+                if published and close_failed:
+                    logger.warning("Audio transferred; response close failed")
     return target_path

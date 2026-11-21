@@ -426,6 +426,9 @@ CLI download failures report a concise nonzero error without private URL userinf
 or fragment values, or transport exception chains. HTTP failures include only
 their status code. Transfer failures preserve previous audio and download metadata,
 and remove only this download's temporary file.
+Response-close failures leave an earlier transfer or replacement error intact.
+When audio output has been published successfully, a response-close failure is
+logged as a warning without response or URL details, and the transfer succeeds.
 Missing or malformed Content-Length (including non-ASCII digits) uses
 indeterminate progress. ASCII decimal lengths are compared to the byte budget
 before integer conversion, ignoring leading zeros; arbitrarily large declared
@@ -465,9 +468,11 @@ GUID under a per-podcast `episodes.json.download.lock`. Concurrent downloads for
 that podcast wait for this claim; feed refreshes can proceed during transfer.
 Publication rechecks ownership under the JSON repository lock. A destination owned
 by another GUID or an unowned existing file is refused without replacing its bytes
-or changing download associations. Each ownership check uses one no-follow stat
-per file lookup, treating a missing entry as absent. Filename comparisons ignore case
-and normalize Unicode on all hosts. Repository filenames and symlink destinations
+or changing download associations. Ownership checks compare filenames using NFC
+normalization and case folding on all hosts before looking up other episodes' files.
+Matching associations use one no-follow stat per lookup. A matching association
+can reserve a filename even when its file is missing. An existing file must be
+regular for its association to count. Repository filenames and symlink destinations
 (including loops) are refused. Unsafe sibling associations do not block unrelated
 downloads. A same-GUID
 refresh of its associated file is allowed only when the existing destination is a

@@ -54,6 +54,34 @@ def test_distinct_guids_cannot_overwrite(store):
     assert len(calls) == 2
 
 
+def test_ownership_stats_only_normalized_matching_associations(store, monkeypatch):
+    repo, episode, other, calls = store
+    episode.title = "café"
+    unrelated = []
+    for i in range(50):
+        row = copy.deepcopy(other)
+        row.guid = f"other-{i}"
+        row.audio_file = f"other-{i}.mp3"
+        unrelated.append(row)
+    other.guid = "z-normalized-owner"
+    other.audio_file = "CAFE\u0301.MP3"
+    repo.add_list([*unrelated, other])
+    (repo.base_dir / other.audio_file).write_bytes(b"other episode audio")
+    lookups = []
+    original_stat = EpisodeRepository._stat
+
+    def record_stat(self, path):
+        if path.suffix.lower() == ".mp3":
+            lookups.append(path.name)
+        return original_stat(self, path)
+
+    monkeypatch.setattr(EpisodeRepository, "_stat", record_stat)
+    with pytest.raises(typer.BadParameter, match="already owned"):
+        pdcst.download("show", "first")
+    assert lookups == ["café.mp3", other.audio_file]
+    assert not calls
+
+
 @pytest.mark.parametrize("name", ["same.mp3", "SAME.MP3"])
 def test_unowned_file_is_preserved(store, name):
     repo, _, _, calls = store
