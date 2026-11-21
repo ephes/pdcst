@@ -232,3 +232,153 @@ def test_small_audio_download_publishes_real_bytes(tmp_path, monkeypatch, episod
     target = repo.download_episode(episode, "saved.wav", download_with_progress)
     assert target.read_bytes() == data
     assert repo.list()[0].audio_file == target.name
+
+
+@pytest.mark.parametrize("use_alias", [False, True])
+def test_direct_download_retries_unsynced_relative_parent(
+    tmp_path, monkeypatch, use_alias
+):
+    root = tmp_path / "real"
+    root.mkdir()
+    if use_alias:
+        (tmp_path / "alias").symlink_to(root, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    prefix = "alias" if use_alias else "real"
+    target = Path(prefix) / "shows" / "episodes" / "saved.mp3"
+    parent = root / "shows"
+    events = []
+    fail_sync = True
+    fsync = os.fsync
+
+    def sync(fd):
+        info = os.fstat(fd)
+        if os.path.samestat(info, root.stat()):
+            events.append(("root", target.exists()))
+            if fail_sync:
+                raise OSError("synthetic parent sync failure")
+        elif parent.exists() and os.path.samestat(info, parent.stat()):
+            events.append(("parent", target.exists()))
+        elif target.parent.exists() and os.path.samestat(info, target.parent.stat()):
+            events.append(("leaf", target.exists()))
+        fsync(fd)
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, stream=httpx.ByteStream(b"completed audio")
+                )
+            ),
+            **kwargs,
+        ),
+    )
+    monkeypatch.setattr(os, "fsync", sync)
+
+    url = "https://example.com/audio.mp3"
+    with pytest.raises(DownloadError, match="parent directory sync failed"):
+        download_with_progress(url, target)
+    assert not target.exists()
+    assert events == [("root", False)]
+
+    events.clear()
+    fail_sync = False
+    assert download_with_progress(url, target) == target
+    assert events == [("root", False), ("parent", False), ("leaf", True)]
+    assert (
+        root / "shows" / "episodes" / target.name
+    ).read_bytes() == b"completed audio"
+
+
+def _serve(monkeypatch, content):
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=content())
+            ),
+            **kwargs,
+        ),
+    )
+
+
+@pytest.mark.skipif(
+    not (getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)),
+    reason="platform has no search-only directory descriptors",
+)
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_direct_download_admits_existing_search_only_ancestor(tmp_path, monkeypatch):
+    guarded = tmp_path / "guarded"
+    destination = guarded / "shows"
+    destination.mkdir(parents=True)
+    target = destination / "saved.mp3"
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    guarded.chmod(0o311)
+    try:
+        assert download_with_progress("https://example.com/a.mp3", target) == target
+    finally:
+        guarded.chmod(0o755)
+    assert target.read_bytes() == b"completed audio"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_direct_download_refuses_new_link_below_unreadable_parent(
+    tmp_path, monkeypatch
+):
+    guarded = tmp_path / "guarded"
+    guarded.mkdir()
+    target = guarded / "shows" / "saved.mp3"
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    guarded.chmod(0o311)
+    try:
+        with pytest.raises(DownloadError, match="unreadable parent"):
+            download_with_progress("https://example.com/a.mp3", target)
+        assert not target.parent.exists()
+    finally:
+        guarded.chmod(0o755)
+
+
+def test_direct_download_reports_alias_change_as_download_error(tmp_path, monkeypatch):
+    root = tmp_path / "real"
+    root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    target = alias / "saved.mp3"
+
+    def chunks():
+        yield b"completed "
+        alias.unlink()
+        yield b"audio"
+
+    _serve(monkeypatch, chunks)
+    with pytest.raises(DownloadError, match="cannot be resolved") as raised:
+        download_with_progress("https://example.com/a.mp3", target)
+    assert str(tmp_path) not in str(raised.value)
+    assert list(root.iterdir()) == []
+
+
+def test_direct_download_refuses_unsyncable_writable_parent_on_retry(
+    tmp_path, monkeypatch
+):
+    import errno
+
+    base = tmp_path / "base"
+    base.mkdir()
+    target = base / "new" / "saved.mp3"
+    fsync = os.fsync
+
+    def sync(fd):
+        if os.path.samestat(os.fstat(fd), base.stat()):
+            raise OSError(errno.EINVAL, "directory fsync unsupported")
+        fsync(fd)
+
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    monkeypatch.setattr(os, "fsync", sync)
+    for _ in range(2):
+        with pytest.raises(DownloadError, match="parent directory sync failed"):
+            download_with_progress("https://example.com/a.mp3", target)
+    assert not target.exists()

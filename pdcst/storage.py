@@ -130,18 +130,30 @@ class DirectoryIdentityChanged(DirectoryAdmissionError):
 # A symlinked final component is refused with ELOOP (Linux/macOS), EMLINK
 # (FreeBSD) or ENOTDIR (O_DIRECTORY checked first).
 _REPLACED_COMPONENT_ERRORS = {errno.ELOOP, errno.EMLINK, errno.ENOTDIR}
+_UNSYNCABLE_DIRECTORY = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EROFS}
 # Ancestors need only search permission, as pathname traversal did.
 _SEARCH_ONLY = getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)
 
 
+def _read_only_unsyncable(error, descriptor):
+    if error.errno not in _UNSYNCABLE_DIRECTORY:
+        return False
+    try:
+        return bool(os.fstatvfs(descriptor).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+
 def _open_component(name, parent, *, search_only_ok):
     flags = os.O_DIRECTORY | os.O_NOFOLLOW
+    readable = True
     try:
         child = os.open(name, os.O_RDONLY | flags, dir_fd=parent)
     except PermissionError:
         if not (search_only_ok and _SEARCH_ONLY):
             raise
         child = os.open(name, _SEARCH_ONLY | flags, dir_fd=parent)
+        readable = False
     try:
         # O_PATH|O_NOFOLLOW may open a link itself; admit directories only.
         if not stat.S_ISDIR(os.fstat(child).st_mode):
@@ -149,11 +161,17 @@ def _open_component(name, parent, *, search_only_ok):
     except BaseException:
         os.close(child)
         raise
-    return child
+    return child, readable
 
 
 @contextmanager
-def admitted_directory(path, *, create=True, parent_fd=None, label="Episode directory"):
+def admitted_directory(
+    path,
+    *,
+    create=True,
+    parent_fd=None,
+    label="Episode directory",
+):
     """Open components without following links and retain their identities.
 
     Relative paths may start at a borrowed parent_fd; its owner must also check
@@ -161,8 +179,10 @@ def admitted_directory(path, *, create=True, parent_fd=None, label="Episode dire
     All writes use the final fd. The checker rejects a renamed/replaced root or
     ancestor even when a replacement happens to contain identical metadata.
     Ancestors that grant only search permission are opened search-only where the
-    platform supports it; the final directory must be readable. The label names
-    the admitted directory in error messages.
+    platform supports it. Creation requires a readable parent and syncs each
+    parent link, including readable parents of already existing components so
+    a retry can settle an interrupted creation. The final directory must be
+    readable. The label names the admitted directory in error messages.
     """
     from pathlib import Path
 
@@ -186,25 +206,44 @@ def admitted_directory(path, *, create=True, parent_fd=None, label="Episode dire
                 descriptor = os.dup(parent_fd)
                 parts = relative.parts
             descriptors.append(descriptor)
+            readable = True
             for position, name in enumerate(parts):
                 search_only_ok = position < len(parts) - 1
                 try:
-                    child = _open_component(
+                    child, child_readable = _open_component(
                         name, descriptor, search_only_ok=search_only_ok
                     )
                 except FileNotFoundError:
                     if not create:
                         raise
+                    if not readable:
+                        raise DirectoryAdmissionError(
+                            f"{label} cannot be created below a search-only parent"
+                        ) from None
                     try:
                         os.mkdir(name, dir_fd=descriptor)
                     except FileExistsError:
                         pass  # Created concurrently; reopen it without following.
-                    child = _open_component(
+                    child, child_readable = _open_component(
                         name, descriptor, search_only_ok=search_only_ok
                     )
                 components.append((descriptor, name, child))
                 descriptors.append(child)
+                if create and readable:
+                    # Existence alone cannot distinguish a durable link from
+                    # a mkdir left behind by a failed sync or another writer.
+                    try:
+                        sync_directory(None, directory_fd=descriptor)
+                    except OSError as error:
+                        # A read-only mount (squashfs, erofs) holds no link a
+                        # writer could have left behind, so nothing to settle.
+                        if not _read_only_unsyncable(error, descriptor):
+                            raise DirectoryAdmissionError(
+                                f"{label}: parent directory sync failed; "
+                                "retry the operation"
+                            ) from None
                 descriptor = child
+                readable = child_readable
         except OSError as error:
             if error.errno in _REPLACED_COMPONENT_ERRORS:
                 raise DirectoryIdentityChanged(

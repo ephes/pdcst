@@ -462,7 +462,13 @@ empty success responses raise `DownloadError` and preserve previous audio and
 metadata, including zero-length and empty chunked responses. A directory-sync
 failure while staging a repository transfer is reported as `DownloadError`.
 The repository removes its stage and preserves previous audio and metadata.
-For direct `download_with_progress` calls, a directory-sync failure after
+Direct `download_with_progress` calls also sync the destination directory's
+readable ancestor links before staging, including when the destination is
+relative or uses a directory alias. Existing search-only ancestors remain
+usable, but missing directories are created only below a readable parent;
+otherwise the call raises `DownloadError` before creating anything. A parent
+sync failure raises `DownloadError` before publishing audio. A retry syncs the
+same chain even when the directories already exist. A directory-sync failure after
 replacement raises `pdcst.storage.PublicationDurabilityError`. Its `path`
 contains the complete replacement bytes, with uncertain durability. The
 response checks verify transfer completeness without validating the audio codec. Responses with a content
@@ -552,6 +558,15 @@ completed audio still at the destination to a reserved `.pdcst-download-*` path,
 and restore previous audio from the reported `.previous` backup if needed.
 Retries never adopt or remove reserved recovery files. A process crash can also
 require manual recovery.
+
+When admitting a writable episode directory, pdcst syncs each readable parent
+before using the directory for publication. New directory links require a
+readable parent. If a parent sync fails, publication stops and a retry repeats
+the parent syncs, including for directories left behind by the failed attempt.
+A parent that cannot be synced is accepted only on a read-only mount (for
+example squashfs), where no unsynced link can exist. The
+destination directory itself must be readable, also for direct
+`download_with_progress` calls.
 
 Audio directory entries are synced before JSON publication; JSON replacement
 also syncs its parent before the previous audio backup may be retired. If JSON
