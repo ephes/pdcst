@@ -155,7 +155,14 @@ def _open_component(name, parent, *, search_only_ok):
 
 
 @contextmanager
-def admitted_directory(path, *, create=True, parent_fd=None, label="Episode directory"):
+def admitted_directory(
+    path,
+    *,
+    create=True,
+    parent_fd=None,
+    label="Episode directory",
+    require_parent_sync=False,
+):
     """Open components without following links and retain their identities.
 
     Relative paths may start at a borrowed parent_fd; its owner must also check
@@ -167,6 +174,8 @@ def admitted_directory(path, *, create=True, parent_fd=None, label="Episode dire
     parent link, including readable parents of already existing components so
     a retry can settle an interrupted creation. The final directory must be
     readable. The label names the admitted directory in error messages.
+    With require_parent_sync, every parent must be readable and synced even
+    when create=False.
     """
     from pathlib import Path
 
@@ -192,7 +201,7 @@ def admitted_directory(path, *, create=True, parent_fd=None, label="Episode dire
             descriptors.append(descriptor)
             readable = True
             for position, name in enumerate(parts):
-                search_only_ok = position < len(parts) - 1
+                search_only_ok = position < len(parts) - 1 and not require_parent_sync
                 try:
                     child, child_readable = _open_component(
                         name, descriptor, search_only_ok=search_only_ok
@@ -213,7 +222,7 @@ def admitted_directory(path, *, create=True, parent_fd=None, label="Episode dire
                     )
                 components.append((descriptor, name, child))
                 descriptors.append(child)
-                if create and readable:
+                if (create or require_parent_sync) and readable:
                     # Existence alone cannot distinguish a durable link from
                     # a mkdir left behind by a failed sync or another writer.
                     try:

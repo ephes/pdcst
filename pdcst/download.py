@@ -1,7 +1,7 @@
 """Download audio without publishing incomplete or unsuccessful responses."""
 
 import logging
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from time import monotonic
 
@@ -10,7 +10,7 @@ import rich.progress
 
 from .config import settings
 from .models import AUDIO_MIME_EXTENSIONS
-from .storage import replacement_file
+from .storage import DirectoryAdmissionError, admitted_directory, replacement_file
 
 MEDIA_TYPES = frozenset(AUDIO_MIME_EXTENSIONS) | {
     "application/ogg",
@@ -42,6 +42,8 @@ def download_with_progress(url, target_path, *, directory_fd=None):
         ) from None
     except (httpx.HTTPError, httpx.InvalidURL):
         raise DownloadError("Unable to fetch audio") from None
+    except DirectoryAdmissionError as error:
+        raise DownloadError(str(error)) from None
 
 
 def _download_with_progress(url, target_path, *, directory_fd=None):
@@ -103,11 +105,40 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                     ):
                         raise DownloadError("Audio download byte limit exceeded")
                     total = int(digits)
-                if directory_fd is None:
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                with replacement_file(
-                    target_path, binary=True, directory_fd=directory_fd
-                ) as output:
+                with ExitStack() as files:
+                    before_replace = None
+                    if directory_fd is None:
+                        parent = target_path.parent
+                        # Keep pathname mkdir semantics for relative paths and
+                        # existing directory aliases, then sync the real chain.
+                        parent.mkdir(parents=True, exist_ok=True)
+                        resolved = parent.resolve(strict=True)
+                        directory_fd, check = files.enter_context(
+                            admitted_directory(
+                                resolved,
+                                create=False,
+                                label="Audio destination directory",
+                                require_parent_sync=True,
+                            )
+                        )
+
+                        def check_destination():
+                            check()
+                            if parent.resolve(strict=True) != resolved:
+                                raise DirectoryAdmissionError(
+                                    "Audio destination directory identity changed"
+                                )
+
+                        before_replace = check_destination
+
+                    output = files.enter_context(
+                        replacement_file(
+                            target_path,
+                            binary=True,
+                            directory_fd=directory_fd,
+                            before_replace=before_replace,
+                        )
+                    )
                     check_deadline()
                     completed = 0
                     with rich.progress.Progress(

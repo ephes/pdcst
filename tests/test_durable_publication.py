@@ -232,3 +232,61 @@ def test_small_audio_download_publishes_real_bytes(tmp_path, monkeypatch, episod
     target = repo.download_episode(episode, "saved.wav", download_with_progress)
     assert target.read_bytes() == data
     assert repo.list()[0].audio_file == target.name
+
+
+@pytest.mark.parametrize("use_alias", [False, True])
+def test_direct_download_retries_unsynced_relative_parent(
+    tmp_path, monkeypatch, use_alias
+):
+    root = tmp_path / "real"
+    root.mkdir()
+    if use_alias:
+        (tmp_path / "alias").symlink_to(root, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    prefix = "alias" if use_alias else "real"
+    target = Path(prefix) / "shows" / "episodes" / "saved.mp3"
+    parent = root / "shows"
+    events = []
+    fail_sync = True
+    fsync = os.fsync
+
+    def sync(fd):
+        info = os.fstat(fd)
+        if os.path.samestat(info, root.stat()):
+            events.append(("root", target.exists()))
+            if fail_sync:
+                raise OSError("synthetic parent sync failure")
+        elif parent.exists() and os.path.samestat(info, parent.stat()):
+            events.append(("parent", target.exists()))
+        elif target.parent.exists() and os.path.samestat(info, target.parent.stat()):
+            events.append(("leaf", target.exists()))
+        fsync(fd)
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, stream=httpx.ByteStream(b"completed audio")
+                )
+            ),
+            **kwargs,
+        ),
+    )
+    monkeypatch.setattr(os, "fsync", sync)
+
+    url = "https://example.com/audio.mp3"
+    with pytest.raises(DownloadError, match="parent directory sync failed"):
+        download_with_progress(url, target)
+    assert not target.exists()
+    assert events == [("root", False)]
+
+    events.clear()
+    fail_sync = False
+    assert download_with_progress(url, target) == target
+    assert events == [("root", False), ("parent", False), ("leaf", True)]
+    assert (
+        root / "shows" / "episodes" / target.name
+    ).read_bytes() == b"completed audio"
