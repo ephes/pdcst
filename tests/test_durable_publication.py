@@ -359,3 +359,34 @@ def test_direct_download_reports_alias_change_as_download_error(tmp_path, monkey
         download_with_progress("https://example.com/a.mp3", target)
     assert str(tmp_path) not in str(raised.value)
     assert list(root.iterdir()) == []
+
+
+@pytest.mark.parametrize("new_link", [False, True])
+def test_direct_download_tolerates_unsyncable_ancestor_only_for_existing_links(
+    tmp_path, monkeypatch, new_link
+):
+    import errno
+
+    base = tmp_path / "base"
+    base.mkdir()
+    destination = base / "new"
+    if not new_link:
+        destination.mkdir()
+    target = destination / "saved.mp3"
+    fsync = os.fsync
+
+    def sync(fd):
+        if os.path.samestat(os.fstat(fd), base.stat()):
+            raise OSError(errno.EINVAL, "directory fsync unsupported")
+        fsync(fd)
+
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    monkeypatch.setattr(os, "fsync", sync)
+    url = "https://example.com/a.mp3"
+    if new_link:
+        with pytest.raises(DownloadError, match="parent directory sync failed"):
+            download_with_progress(url, target)
+        assert not target.exists()
+    else:
+        assert download_with_progress(url, target) == target
+        assert target.read_bytes() == b"completed audio"

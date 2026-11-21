@@ -62,11 +62,12 @@ def _create_destination_parent(parent):
     Admission syncs every readable parent of the destination chain, so a retry
     settles links left by an interrupted attempt. Existing search-only
     ancestors stay usable, but a new link below one could never be synced.
+    Returns the resolved existing base when directories were created.
     """
-    base = parent
+    base, resolved = parent, None
     while True:
         try:
-            base.resolve(strict=True)
+            resolved = base.resolve(strict=True)
             break
         except FileNotFoundError:
             if base.parent == base:
@@ -77,7 +78,11 @@ def _create_destination_parent(parent):
                 "Audio destination directory cannot be opened or created"
             ) from None
     if base == parent:
-        return
+        return None
+    if resolved is None:
+        raise DirectoryAdmissionError(
+            "Audio destination directory cannot be opened or created"
+        )
     try:
         descriptor = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
@@ -87,6 +92,7 @@ def _create_destination_parent(parent):
         ) from None
     os.close(descriptor)
     parent.mkdir(parents=True, exist_ok=True)
+    return resolved
 
 
 def _download_with_progress(url, target_path, *, directory_fd=None):
@@ -154,11 +160,13 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         parent = target_path.parent
                         # Keep pathname mkdir semantics for relative paths and
                         # existing directory aliases, then sync the real chain.
-                        _create_destination_parent(parent)
+                        created_below = _create_destination_parent(parent)
                         resolved = _resolve_destination(parent)
                         directory_fd, check = files.enter_context(
                             admitted_directory(
-                                resolved, label="Audio destination directory"
+                                resolved,
+                                label="Audio destination directory",
+                                created_below=created_below,
                             )
                         )
 
