@@ -1588,6 +1588,18 @@ class PodcastRepository(JsonRepository):
                         f"Audio saved in {resolved}, but the subscription directory "
                         "could not be saved."
                     )
+                    moved = []
+
+                    def check_pin():
+                        # Storage root first, so a failure after it names the
+                        # episode directory that holds the saved audio.
+                        locked._check_directory()
+                        try:
+                            selected._check_directory()
+                        except DirectoryIdentityChanged:
+                            moved.append(True)
+                            raise
+
                     try:
                         with locked._lock():
                             rows = locked._fetch_all()
@@ -1596,12 +1608,25 @@ class PodcastRepository(JsonRepository):
                             locked._check_legacy_directory_owner(rows, url, target)
                             rows[url] = stored.copy(update={"directory": directory})
                             pin = copy(locked)
-                            pin._check_directory = selected._check_directory
+                            pin._check_directory = check_pin
                             pin._write_models(rows)
                     except PublicationDurabilityError:
                         raise
                     except DownloadConflict as error:
                         raise StoreWriteError(f"{incomplete} {error}") from None
+                    except DirectoryIdentityChanged:
+                        if not moved:
+                            raise StoreWriteError(
+                                f"{incomplete} Check local storage and set the "
+                                "directory in podcasts.json before retrying."
+                            ) from None
+                        raise StoreWriteError(
+                            f"Audio was saved in the episode directory then at "
+                            f"{resolved}, but that directory moved or was replaced "
+                            "before the subscription directory could be saved. "
+                            "Restore the original directory layout and verify the "
+                            "saved files before retrying."
+                        ) from None
                     except (
                         OSError,
                         DuplicateIdentity,

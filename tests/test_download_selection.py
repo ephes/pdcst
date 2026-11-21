@@ -342,12 +342,14 @@ def test_legacy_pin_rechecks_audio_directory_after_catalog_stage_sync(
 
     monkeypatch.setattr(pdcst, "download_with_progress", transfer)
     monkeypatch.setattr(PodcastRepository, "_write_models", write_with_directory_swap)
-    with pytest.raises(
-        typer.BadParameter,
-        match="Audio saved in .*subscription directory could not be saved",
-    ):
+    with pytest.raises(typer.BadParameter) as raised:
         pdcst.download("synthetic", "refactor")
 
+    message = str(raised.value)
+    assert f"episode directory then at {chosen.resolve()}" in message
+    assert "moved or was replaced" in message
+    assert "Restore the original directory layout" in message
+    assert "set the directory in podcasts.json" not in message
     assert shows.path.read_bytes() == original_catalog
     assert list(chosen.iterdir()) == [chosen / "untouched"]
     assert (chosen / "untouched").read_bytes() == b"replacement directory"
