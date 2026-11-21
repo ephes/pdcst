@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
+from math import isfinite
 from operator import itemgetter
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urljoin, urlsplit
@@ -281,6 +282,13 @@ def unique_json_object(pairs):
             raise ValueError("duplicate JSON member")
         result[key] = value
     return result
+
+
+def finite_json_float(token):
+    value = float(token)
+    if not isfinite(value):
+        raise ValueError("nonfinite JSON number")
+    return value
 
 
 class DownloadConflict(ValueError):
@@ -622,7 +630,12 @@ class JsonRepository:
         except UnicodeError:
             raise StoreReadError(self.path, "invalid UTF-8") from None
         try:
-            values = json.loads(decoded, object_pairs_hook=unique_json_object)
+            values = json.loads(
+                decoded,
+                object_pairs_hook=unique_json_object,
+                parse_constant=finite_json_float,
+                parse_float=finite_json_float,
+            )
         except (ValueError, RecursionError):
             raise StoreReadError(self.path, "invalid JSON") from None
         try:
@@ -674,7 +687,12 @@ class JsonRepository:
 
     def _serialize_models(self, locked):
         models = self.storage_model_list_type(__root__=list(locked.values()))
-        serialized = models.json().encode("utf-8")
+        try:
+            serialized = models.json(allow_nan=False).encode("utf-8")
+        except ValueError:
+            raise StoreWriteError(
+                f"Cannot write metadata {self.path}: invalid JSON"
+            ) from None
         if len(serialized) > STORE_MAX_BYTES:
             raise StoreWriteError(
                 f"Cannot write metadata {self.path}: size limit exceeded (16 MiB)"

@@ -633,9 +633,11 @@ restore a regular JSON file at the named path before retrying. Nonregular files,
 oversize input, malformed JSON/schema and filesystem failures raise
 `StoreReadError` (`ValueError`) with the path and a trusted category, never stored
 record values. Repeated JSON object members are invalid JSON, including identical
-values, escaped spellings of the same name, nested feed fields and unknown fields;
-they are refused before model construction. Original bytes remain untouched for
-manual correction or recovery from a trusted backup. Every CLI command reports
+values, escaped spellings of the same name, nested feed fields and unknown fields.
+`NaN`, `Infinity`, `-Infinity` and numbers whose exponents overflow to infinity
+are also refused before model construction, even in ignored fields. Metadata
+writes refuse nonfinite numbers before replacement. Original bytes remain
+untouched for manual correction or recovery from a trusted backup. Every CLI command reports
 these failures concisely with a nonzero exit status. Restore/correct the named
 store (or repair its read permissions)
 before retrying; writing operations refuse unreadable existing stores and never
