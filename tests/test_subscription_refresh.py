@@ -790,16 +790,28 @@ def test_listing_refuses_shared_legacy_directory(
     assert {path: path.read_bytes() for path in before} == before
 
 
+@pytest.mark.parametrize(
+    "authority,origin",
+    [
+        ("other.example.test:8443", "https://other.example.test:8443"),
+        ("[2001:db8::1]:8443", "https://[2001:db8::1]:8443"),
+        ("other.example.test:PORT_SECRET", "feed origin unavailable"),
+        ("other.example.test\\@HOST_SECRET", "feed origin unavailable"),
+    ],
+)
 def test_shared_legacy_directory_refuses_only_affected_selection(
-    tmp_path, monkeypatch, podcast
+    tmp_path, monkeypatch, podcast, authority, origin
 ):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     shows = PodcastRepository(tmp_path)
     podcast.title = "Synthetic/Show"
     podcast.directory = None
+    podcast.feed.url = (
+        "https://USER_SECRET:PASS_SECRET@example.test/PATH_SECRET?a=FIRST_SECRET"
+    )
     other = copy.deepcopy(podcast)
     other.title = "Synthetic:Show"
-    other.feed.url = "https://example.test/other\x1b"
+    other.feed.url = f"https://{authority}/other\x1b?a=SECOND_SECRET#FRAGMENT_SECRET"
     unrelated = copy.deepcopy(podcast)
     unrelated.title = "Unrelated Show"
     unrelated.feed.url = "https://example.test/unrelated"
@@ -829,8 +841,10 @@ def test_shared_legacy_directory_refuses_only_affected_selection(
         pdcst.list_podcasts()
     message = str(cli_error.value)
     assert "already used by another feed" in message
-    assert f"<{podcast.feed.url}>" in message
-    assert "<https://example.test/other\\u001b>" in message
+    assert "distinct --podcast-dir" in message
+    assert "Synthetic/Show <https://example.test>" in message
+    assert f"Synthetic:Show <{origin}>" in message
+    assert "_SECRET" not in message
     assert "\x1b" not in message
     assert shows.path.read_bytes() == before
 

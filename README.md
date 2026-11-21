@@ -192,7 +192,10 @@ For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
 A legacy directory mapping that shares a resolved directory with another feed
 under NFC normalization and case folding is refused: `podcasts` fails and names
-the affected feeds (escaped like other output), and `episodes`/`download` refuse
+the affected subscriptions by escaped title and HTTP(S) origin (scheme, host,
+and optional port). Feed credentials, paths, queries, and fragments are omitted.
+If an origin cannot be parsed, the CLI displays `feed origin unavailable`.
+The `episodes` and `download` commands refuse
 those feeds while other subscriptions stay usable. The API raises
 `SharedDirectoryError` (a `StoreReadError` whose message contains no stored
 values; its `shared` and `podcasts` attributes hold the affected and all

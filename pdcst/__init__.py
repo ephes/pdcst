@@ -3,8 +3,10 @@ pdcst is a little podcast command line utility to show
 new episodes and download audio files.
 """
 
+import re
 import unicodedata
 from pathlib import Path, PureWindowsPath
+from urllib.parse import urlsplit
 
 import typer
 
@@ -48,6 +50,26 @@ def terminal_text(value) -> str:
         )
         for char in str(value)
     )
+
+
+def _feed_origin(feed_url: str) -> str:
+    """Return only the scheme, hostname and optional port of a stored feed."""
+    unavailable = "feed origin unavailable"
+    try:
+        url = urlsplit(feed_url)
+        host, port = url.hostname, url.port
+    except ValueError:
+        return unavailable
+    if (
+        url.scheme not in {"http", "https"}
+        or not host
+        or "\\" in url.netloc
+        or not re.fullmatch(r"[\w.:-]+", host)
+    ):
+        return unavailable
+    if url.netloc.rsplit("@", 1)[-1].startswith("["):
+        host = f"[{host}]"
+    return f"{url.scheme}://{host}" + (f":{port}" if port is not None else "")
 
 
 def contained_path(root, *parts):
@@ -306,7 +328,7 @@ def list_podcasts():
         all_podcasts = list_all_podcasts()
     except SharedDirectoryError as error:
         feeds = "; ".join(
-            f"{terminal_text(podcast.title)} <{terminal_text(podcast.feed.url)}>"
+            f"{terminal_text(podcast.title)} <{_feed_origin(podcast.feed.url)}>"
             for podcast in error.shared
         )
         raise typer.BadParameter(

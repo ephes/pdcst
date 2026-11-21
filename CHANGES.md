@@ -1,5 +1,8 @@
 # Unreleased
 
+* Identify subscriptions sharing an episode directory by title and feed origin,
+  omitting private URL components from CLI diagnostics.
+
 * Report an unavailable or unsafe episode directory as a CLI error when listing
   episodes.
 
