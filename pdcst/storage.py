@@ -35,7 +35,7 @@ def sync_directory(path, *, directory_fd=None):
 
 
 @contextmanager
-def replacement_file(target, *, binary=False, directory_fd=None):
+def replacement_file(target, *, binary=False, directory_fd=None, before_replace=None):
     # Short name: independent of the length of the destination name.
     temporary = target.with_name(f".{uuid.uuid4().hex}.tmp")
 
@@ -89,6 +89,8 @@ def replacement_file(target, *, binary=False, directory_fd=None):
             raise
         else:
             os.close(descriptor)
+        if before_replace is not None:
+            before_replace()
         if directory_fd is None:
             os.replace(temporary, target)
         else:

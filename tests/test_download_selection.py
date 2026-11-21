@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -144,11 +148,87 @@ def test_first_successful_download_freezes_legacy_directory(
     assert not list(competitor.iterdir())
 
 
+@pytest.mark.parametrize("conflicting_claim", [False, True])
+def test_legacy_transfer_releases_catalog_writer_and_rechecks_ownership(
+    tmp_path, monkeypatch, podcast, episode, conflicting_claim
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Synthetic Show"
+    podcast.directory = None
+    podcast.file_name_pattern = "saved.mp3"
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    chosen = tmp_path / "synthetic_show"
+    episode.audio_url = "https://example.test/episode.mp3"
+    EpisodeRepository(chosen).add(episode)
+    other_directory = chosen.name if conflicting_claim else "other_show"
+    other_url = "https://example.test/other.xml"
+
+    def transfer(url, stage, **kwargs):
+        # A separate process must finish its update before this transfer returns.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import sys
+from pathlib import Path
+from pdcst.models import Podcast
+from pdcst.repository import PodcastRepository
+
+shows = PodcastRepository(Path(sys.argv[1]))
+data = next(iter(shows.all.values())).dict()
+data["feed"]["url"] = sys.argv[2]
+data.update(title="Other Show", directory=sys.argv[3])
+shows.add(Podcast.from_dict(data))
+""",
+                str(tmp_path),
+                other_url,
+                other_directory,
+            ],
+            env={**os.environ, "PDCST_LOCK_WAIT_SECONDS": "0.2"},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    if conflicting_claim:
+        with pytest.raises(typer.BadParameter, match="already used by another feed"):
+            pdcst.download("synthetic", "refactor")
+    else:
+        pdcst.download("synthetic", "refactor")
+
+    assert shows.all[other_url].directory == other_directory
+    assert shows.all[podcast.feed.url].directory == (
+        None if conflicting_claim else chosen.name
+    )
+    assert (chosen / "saved.mp3").read_bytes() == b"synthetic audio"
+
+
 def _forbid_transfer(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("refused legacy directory reached the transfer")
 
     monkeypatch.setattr(pdcst, "download_with_progress", forbidden)
+
+
+def test_legacy_subscription_without_episode_directory_reports_missing_episode(
+    tmp_path, monkeypatch, podcast
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Synthetic Show"
+    podcast.directory = None
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    original = shows.path.read_bytes()
+    _forbid_transfer(monkeypatch)
+    with pytest.raises(typer.BadParameter, match="^No matching episode$"):
+        pdcst.download("synthetic", "refactor")
+    assert shows.path.read_bytes() == original
+    assert not (tmp_path / "synthetic_show").exists()
 
 
 def test_legacy_pin_refuses_reserved_directory(tmp_path, monkeypatch, podcast):
@@ -222,6 +302,59 @@ def test_legacy_pin_identity_change_reports_saved_audio(
         tmp_path / "synthetic_show_" / "saved.mp3"
     ).read_bytes() == b"synthetic audio"
     assert shows.path.read_bytes() == original
+
+
+def test_legacy_pin_rechecks_audio_directory_after_catalog_stage_sync(
+    tmp_path, monkeypatch, podcast, episode
+):
+    from pdcst import storage
+
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.title = "Synthetic Show"
+    podcast.directory = None
+    podcast.file_name_pattern = "saved.mp3"
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    original_catalog = shows.path.read_bytes()
+    chosen = tmp_path / "synthetic_show"
+    original_directory = tmp_path / "original"
+    episode.audio_url = "https://example.test/episode.mp3"
+    EpisodeRepository(chosen).add(episode)
+
+    def transfer(url, stage, **kwargs):
+        stage.write_bytes(b"synthetic audio")
+
+    write_models = PodcastRepository._write_models
+    fsync = storage.os.fsync
+
+    def write_with_directory_swap(self, rows):
+        def swap_after_sync(fd):
+            fsync(fd)
+            if not original_directory.exists():
+                assert (chosen / "saved.mp3").read_bytes() == b"synthetic audio"
+                chosen.rename(original_directory)
+                chosen.mkdir()
+                (chosen / "untouched").write_bytes(b"replacement directory")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(storage.os, "fsync", swap_after_sync)
+            return write_models(self, rows)
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    monkeypatch.setattr(PodcastRepository, "_write_models", write_with_directory_swap)
+    with pytest.raises(typer.BadParameter) as raised:
+        pdcst.download("synthetic", "refactor")
+
+    message = str(raised.value)
+    assert f"episode directory then at {chosen.resolve()}" in message
+    assert "moved or was replaced" in message
+    assert "Restore the original directory layout" in message
+    assert "set the directory in podcasts.json" not in message
+    assert shows.path.read_bytes() == original_catalog
+    assert list(chosen.iterdir()) == [chosen / "untouched"]
+    assert (chosen / "untouched").read_bytes() == b"replacement directory"
+    assert (original_directory / "saved.mp3").read_bytes() == b"synthetic audio"
+    assert EpisodeRepository(original_directory).list()[0].audio_file == "saved.mp3"
 
 
 def test_concurrently_pinned_directory_releases_subscription_lock(

@@ -691,10 +691,12 @@ class JsonRepository:
         serialized = self._serialize_models(locked)
         self._check_directory()
         with replacement_file(
-            self.path, binary=True, directory_fd=self._directory_fd
+            self.path,
+            binary=True,
+            directory_fd=self._directory_fd,
+            before_replace=self._check_directory,
         ) as output:
             output.write(serialized)
-            self._check_directory()
 
     def add(self, model):
         """Add a single model to the repository."""
@@ -886,6 +888,10 @@ class EpisodeRepository(JsonRepository):
     def download_episode(self, episode, name, transfer):
         """Transfer callbacks must use the supplied directory_fd for stage IO."""
         try:
+            if self._directory_fd is not None:
+                return self._download_in_directory(
+                    episode, name, transfer, self._check_directory
+                )
             with admitted_directory(self.base_dir) as (descriptor, check):
                 admitted = copy(self)
                 admitted._directory_fd = descriptor
@@ -1499,76 +1505,139 @@ class PodcastRepository(JsonRepository):
             raise SharedDirectoryError(self.path, podcasts, shared)
         return podcasts
 
+    def _download_subscription_selection(self, rows, url):
+        from . import contained_path, subscription_directory
+
+        stored = rows.get(url)
+        if stored is None:
+            raise DownloadConflict("Podcast subscription changed; retry download")
+        current = self._listed_podcast(stored)
+        if stored.directory is not None:
+            return stored, current, contained_path(self.base_dir, current.directory)
+        try:
+            resolved = subscription_directory(current.directory, root=self.base_dir)
+        except ValueError as error:
+            raise DownloadConflict(
+                f"{error}; set a distinct directory in podcasts.json"
+            ) from None
+        current.directory = str(resolved.relative_to(self.base_dir.resolve()))
+        return stored, current, resolved
+
+    def _check_legacy_directory_owner(self, rows, url, target):
+        from . import _subscription_directory_key
+
+        for other_url, other in rows.items():
+            if other_url == url:
+                continue
+            try:
+                other_key = _subscription_directory_key(
+                    self.base_dir, self._listed_podcast(other).directory
+                )
+            except ValueError:
+                # Unsafe legacy paths cannot own a contained destination.
+                continue
+            if other_key == target:
+                raise DownloadConflict(
+                    "Podcast directory is already used by another feed; "
+                    "set a distinct directory in podcasts.json"
+                )
+
     @contextmanager
     def download_subscription(self, podcast):
-        """Pin the directory of a legacy subscription after a completed download.
-
-        The directory is validated like a subscription directory, and refused
-        when another feed already uses it, before any download starts.
-        """
-        from . import (
-            _subscription_directory_key,
-            contained_path,
-            subscription_directory,
-        )
+        """Yield the selected podcast and any reselected episode repository."""
+        from . import _subscription_directory_key
 
         if not podcast._legacy_directory:
             yield podcast, None
             return
 
-        with self.admitted(create=False) as admitted, ExitStack() as migration:
-            migration.enter_context(admitted._lock())
-            rows = admitted._fetch_all()
-            stored = rows.get(podcast.feed.url)
-            if stored is None:
-                raise DownloadConflict("Podcast subscription changed; retry download")
-            current = admitted._listed_podcast(stored)
-            root = admitted.base_dir.resolve()
-            resolved = contained_path(root, current.directory)
-            admitted._check_directory()
+        url = podcast.feed.url
+        with self.admitted(create=False) as admitted:
+            # Refuse reserved paths before creating anything in the feed lock directory.
+            stored, current, resolved = admitted._download_subscription_selection(
+                admitted._fetch_all(), url
+            )
             if stored.directory is not None:
-                migration.close()
-                yield current, resolved
+                yield current, EpisodeRepository(resolved)
                 return
 
-            try:
-                subscription_directory(current.directory, root=root)
-            except ValueError as error:
-                raise DownloadConflict(
-                    f"{error}; set a distinct directory in podcasts.json"
-                ) from None
-
-            target = _subscription_directory_key(root, current.directory)
-            for url, other in rows.items():
-                if url == podcast.feed.url:
-                    continue
-                try:
-                    other_key = _subscription_directory_key(
-                        root, admitted._listed_podcast(other).directory
+            with admitted.feed_lock(url) as locked:
+                with locked._lock():
+                    rows = locked._fetch_all()
+                    stored, current, resolved = locked._download_subscription_selection(
+                        rows, url
                     )
-                except ValueError:
-                    # Unsafe legacy paths cannot own a contained destination.
-                    continue
-                if other_key == target:
-                    raise DownloadConflict(
-                        "Podcast directory is already used by another feed; "
-                        "set a distinct directory in podcasts.json"
-                    )
+                    directory = current.directory
+                    if stored.directory is None:
+                        target = _subscription_directory_key(locked.base_dir, directory)
+                        locked._check_legacy_directory_owner(rows, url, target)
+                        rows[url] = stored.copy(update={"directory": directory})
+                        locked._serialize_models(rows)
 
-            current.directory = str(resolved.relative_to(root))
-            stored.directory = current.directory
-            admitted._serialize_models(rows)
-            yield current, resolved
-            try:
-                admitted._write_models(rows)
-            except PublicationDurabilityError:
-                raise
-            except (OSError, StoreWriteError, DirectoryAdmissionError):
-                raise StoreWriteError(
-                    f"Audio saved in {resolved}, but the subscription directory "
-                    "could not be saved. Check local storage and set the directory "
-                    "in podcasts.json before retrying."
-                ) from None
+                episodes = EpisodeRepository(resolved)
+                if stored.directory is not None or not os.path.lexists(resolved):
+                    # A missing directory holds no episodes to select; selection
+                    # reports the missing episode and nothing is pinned.
+                    yield current, episodes
+                    return
+
+                # Keep the directory used by the audio transfer admitted through pinning.
+                with episodes.admitted(create=False, parent=locked) as selected:
+                    yield current, selected
+                    incomplete = (
+                        f"Audio saved in {resolved}, but the subscription directory "
+                        "could not be saved."
+                    )
+                    moved = []
+
+                    def check_pin():
+                        # Storage root first, so a failure after it names the
+                        # episode directory that holds the saved audio.
+                        locked._check_directory()
+                        try:
+                            selected._check_directory()
+                        except DirectoryIdentityChanged:
+                            moved.append(True)
+                            raise
+
+                    try:
+                        with locked._lock():
+                            rows = locked._fetch_all()
+                            if rows.get(url) != stored:
+                                raise DownloadConflict("Podcast subscription changed")
+                            locked._check_legacy_directory_owner(rows, url, target)
+                            rows[url] = stored.copy(update={"directory": directory})
+                            pin = copy(locked)
+                            pin._check_directory = check_pin
+                            pin._write_models(rows)
+                    except PublicationDurabilityError:
+                        raise
+                    except DownloadConflict as error:
+                        raise StoreWriteError(f"{incomplete} {error}") from None
+                    except DirectoryIdentityChanged:
+                        if not moved:
+                            raise StoreWriteError(
+                                f"{incomplete} Check local storage and set the "
+                                "directory in podcasts.json before retrying."
+                            ) from None
+                        raise StoreWriteError(
+                            f"Audio was saved in the episode directory then at "
+                            f"{resolved}, but that directory moved or was replaced "
+                            "before the subscription directory could be saved. "
+                            "Restore the original directory layout and verify the "
+                            "saved files before retrying."
+                        ) from None
+                    except (
+                        OSError,
+                        DuplicateIdentity,
+                        StoreReadError,
+                        StoreWriteError,
+                        DirectoryAdmissionError,
+                    ):
+                        raise StoreWriteError(
+                            f"{incomplete} Check local storage and set the directory "
+                            "in podcasts.json before retrying."
+                        ) from None
 
     name = "podcasts.json"
     storage_model_type = PodcastInDb
