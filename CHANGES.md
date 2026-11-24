@@ -1,5 +1,8 @@
 # Unreleased
 
+* Use the subscription repository’s root throughout import, including path
+  validation, ownership checks and episode metadata publication.
+
 * Identify the stored `published` or `feed.updated` field when its offset
   would place the timestamp outside the UTC date range.
 

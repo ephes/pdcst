@@ -342,8 +342,11 @@ or download lock names, `.feed-locks`, or any `.pdcst-refresh-`/`.pdcst-download
 name (including intent and recovery names). The check ignores case, normalizes
 Unicode and includes resolved in-root aliases; it applies at every nesting level.
 Explicit reserved directories are refused before creating locks/directories or
-fetching the feed. Ordinary custom/hidden directories such as `.shows` remain
-supported. Legacy stored reserved directories must be corrected before refresh.
+fetching the feed. When a library caller supplies a `PodcastRepository` to
+`subscribe()`, that repository’s root determines directory and filename
+validation, directory ownership and the location of both metadata stores.
+Ordinary custom and hidden directories such as `.shows` remain supported.
+Legacy stored reserved directories must be corrected before refresh.
 Filename patterns must produce a single relative filename. Supported placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
@@ -385,11 +388,10 @@ The CLI resolves the configured storage root (`PDCST_HOME`) first, so a
 symlinked ancestor such as macOS `/tmp` keeps working; errors name the storage
 root, episode or feed lock directory that failed. A relative storage root passed
 by a library caller is made absolute when it is admitted.
-Refresh opens the episode directory relative to the held root and holds it as
-well (an episode path that no longer lies under the admitted root, for example
-after `PDCST_HOME` is retargeted during the fetch, is refused): locks, backups,
-intents, replacements,
-cleanup and rollback use those descriptors. A changed root/ancestor refuses
+Refresh opens and holds the episode directory relative to the admitted root.
+If the configured path is a symlink retargeted during acquisition, the refresh
+continues in the original tree as long as that admitted root is intact. Locks,
+backups, intents, replacements, cleanup and rollback use those descriptors. A changed root/ancestor refuses
 publication without writing into its replacement; rollback stays in the admitted
 (possibly renamed) tree. Restore the original directory layout before retrying.
 Browsing a missing root still creates no directories.

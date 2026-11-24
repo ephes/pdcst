@@ -146,19 +146,22 @@ def subscribe(
     """
     Subscribe to a podcast feed url.
     """
-    if podcast_dir is not None:
-        subscription_directory(podcast_dir)
-    if fp_repo is None:
-        fp_repo = FeedParserRepository()
     if podcasts_repo is None:
         podcasts_repo = PodcastRepository(Path(settings.root).resolve())
+    root = podcasts_repo.base_dir.absolute()
+    if podcast_dir is not None:
+        subscription_directory(podcast_dir, root=root)
+    if fp_repo is None:
+        fp_repo = FeedParserRepository()
     with podcasts_repo.admitted() as admitted:
         admitted._check_intents()
         with admitted.feed_lock(feed_url) as locked:
-            return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, locked)
+            return _subscribe(
+                feed_url, name_pattern, podcast_dir, fp_repo, locked, root
+            )
 
 
-def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
+def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo, root):
     """Acquire and publish while the caller holds the per-feed lock."""
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
     with podcasts_repo._lock():
@@ -173,7 +176,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
             else:
                 legacy = podcast.title.lower().replace(" ", "_")
                 try:
-                    legacy_path = contained_path(settings.root, legacy)
+                    legacy_path = contained_path(root, legacy)
                 except ValueError:
                     pass
                 else:
@@ -185,13 +188,13 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
             if item.feed.url == feed_url:
                 continue
             try:
-                owners.add(_subscription_directory_key(settings.root, item.directory))
+                owners.add(_subscription_directory_key(root, item.directory))
             except ValueError:
                 # Unsafe legacy paths cannot own a contained destination.
                 continue
 
         def owned(directory):
-            return _subscription_directory_key(settings.root, directory) in owners
+            return _subscription_directory_key(root, directory) in owners
 
         if owned(podcast.directory):
             if podcast_dir is not None or existing is not None:
@@ -204,7 +207,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
             while owned(podcast.directory):
                 podcast.directory = f"{base}_{suffix}"
                 suffix += 1
-        episode_dir = subscription_directory(podcast.directory)
+        episode_dir = subscription_directory(podcast.directory, root=root)
 
         def prepare(episodes_by_guid):
             if episodes_by_guid:
@@ -212,7 +215,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                 render_name = podcast.audio_filename_renderer()
                 for episode in episodes_by_guid.values():
                     name = render_name(episode)
-                    contained_path(settings.root, podcast.directory, name)
+                    contained_path(root, podcast.directory, name)
                     key = unicodedata.normalize("NFC", name).casefold()
                     if key in names:
                         raise FilenamePatternError(
