@@ -260,17 +260,10 @@ def list_all_podcasts(podcasts=None) -> list[Podcast]:
 
 def list_all_episodes(podcast) -> list[Episode]:
     """
-    List all episodes for a podcast.
+    List all episodes for a current subscription.
     """
-    try:
-        directory = contained_path(settings.root, podcast.directory)
-    except (OSError, RuntimeError, ValueError):
-        raise StoreReadError(
-            Path(EpisodeRepository.name),
-            "podcast episode directory is unavailable or unsafe",
-        ) from None
-    episodes_repo = EpisodeRepository(directory)
-    return episodes_repo.list(additional_attributes={"podcast": podcast})
+    subscriptions = PodcastRepository(Path(settings.root).resolve())
+    return subscriptions.list_episodes(podcast)
 
 
 class SelectionError(ValueError):

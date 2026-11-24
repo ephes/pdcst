@@ -249,3 +249,46 @@ def test_episodes_refuses_nonunique_title(browsing_store, identifier, message):
     assert message in result["output"]
     assert "Traceback" not in result["output"]
     assert result["opened"] == result["episodes"] == []
+
+
+@pytest.mark.parametrize("move_at", ["selection", "episode_read"])
+def test_episodes_refuses_subscription_directory_change(
+    browsing_store, monkeypatch, move_at
+):
+    monkeypatch.setattr(pdcst.settings, "root", browsing_store)
+    shows = PodcastRepository(browsing_store)
+    select = pdcst.find_podcast_by_identifier
+    read = EpisodeRepository.list
+
+    def move_subscription(podcast):
+        # The old directory and its episode bytes remain readable after the move.
+        updated = Podcast.from_dict(podcast.dict() | {"directory": "new-store"})
+        shows.add(updated)
+
+    def select_then_move(*args, **kwargs):
+        podcast = select(*args, **kwargs)
+        move_subscription(podcast)
+        return podcast
+
+    def read_then_move(self, additional_attributes=None):
+        episodes = read(self, additional_attributes)
+        move_subscription(additional_attributes["podcast"])
+        return episodes
+
+    if move_at == "selection":
+        monkeypatch.setattr(pdcst, "find_podcast_by_identifier", select_then_move)
+    else:
+        monkeypatch.setattr(EpisodeRepository, "list", read_then_move)
+
+    result = CliRunner().invoke(
+        pdcst.cli, ["episodes", "Amber Observatory"], env={"COLUMNS": "120"}
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "Podcast subscription directory changed; retry" in result.output
+    assert "First Light" not in result.output
+    assert "Second Orbit" not in result.output
+    assert shows.all["https://example.invalid/amber-store/feed.xml"].directory == (
+        "new-store"
+    )
+    assert len(read(EpisodeRepository(browsing_store / "amber-store"))) == 2
