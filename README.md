@@ -198,10 +198,12 @@ If a legacy lookup encounters a symlink loop, the subscription stays unpinned
 and the catalog listing continues.
 A directory shared by multiple feeds is refused for both explicitly saved and
 legacy directories. Ownership uses resolved paths, NFC normalization and case
-folding. The `podcasts` command fails and names the affected subscriptions by
-escaped title and HTTP(S) origin (scheme, host,
-and optional port). Feed credentials, paths, queries, and fragments are omitted.
-If an origin cannot be parsed, the CLI displays `feed origin unavailable`.
+folding. The `podcasts` command fails and shows up to five affected
+subscriptions with escaped title previews of at most 160 characters and
+HTTP(S) origins (scheme, host, and optional port). It reports how many more
+feeds conflict. Feed credentials, paths, queries, and fragments are omitted.
+The CLI displays `feed origin unavailable` for an unparseable origin or a
+host longer than 254 characters.
 The `episodes` and `download` commands refuse
 those feeds while other subscriptions stay usable. The API raises
 `SharedDirectoryError` (a `StoreReadError` whose message contains no stored
