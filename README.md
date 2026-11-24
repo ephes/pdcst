@@ -198,10 +198,12 @@ If a legacy lookup encounters a symlink loop, the subscription stays unpinned
 and the catalog listing continues.
 A directory shared by multiple feeds is refused for both explicitly saved and
 legacy directories. Ownership uses resolved paths, NFC normalization and case
-folding. The `podcasts` command fails and names the affected subscriptions by
-escaped title and HTTP(S) origin (scheme, host,
-and optional port). Feed credentials, paths, queries, and fragments are omitted.
-If an origin cannot be parsed, the CLI displays `feed origin unavailable`.
+folding. The `podcasts` command fails and shows up to five affected
+subscriptions with escaped title previews of at most 160 characters and
+HTTP(S) origins (scheme, host, and optional port). It reports how many more
+feeds conflict. Feed credentials, paths, queries, and fragments are omitted.
+The CLI displays `feed origin unavailable` for an unparseable origin or a
+host longer than 254 characters.
 The `episodes` and `download` commands refuse
 those feeds while other subscriptions stay usable. The API raises
 `SharedDirectoryError` (a `StoreReadError` whose message contains no stored
@@ -213,9 +215,10 @@ Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
 line/paragraph separators and bidirectional override/isolate marks as visible
 `\uXXXX` escapes, so a feed cannot rewrite, hide or reorder terminal output or add
-lines to a listing. `podcasts` uses a 160-character display budget for the title
-and episode count together. It marks shortened titles with `…` and keeps
-each escape intact. Stored titles keep their original text, and title matching for
+lines to a listing. Each `podcasts` listing line and the `add` confirmation
+use a 160-character display budget, including the episode count or confirmation
+text. Shortened titles end in `…`, and each escape stays intact.
+Stored titles keep their original text, and title matching for
 `episodes` and `download` uses that original text. Library callers that print
 `Podcast`/`Episode` objects themselves can use `pdcst.terminal_text()`.
 

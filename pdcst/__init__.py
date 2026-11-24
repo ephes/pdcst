@@ -38,6 +38,8 @@ _TERMINAL_UNSAFE_FORMATS = frozenset(
     "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
 )
 _PODCAST_LINE_MAX_CHARS = 160
+_SHARED_FEED_PREVIEW_LIMIT = 5
+_FEED_ORIGIN_MAX_HOST_CHARS = 254
 
 
 def _terminal_character(char: str) -> str:
@@ -80,6 +82,7 @@ def _feed_origin(feed_url: str) -> str:
     if (
         url.scheme not in {"http", "https"}
         or not host
+        or len(host) > _FEED_ORIGIN_MAX_HOST_CHARS
         or "\\" in url.netloc
         or not re.fullmatch(r"[\w.:-]+", host)
     ):
@@ -348,7 +351,10 @@ def add(
             "Unable to update local storage: filesystem error; "
             "check PDCST_HOME and write permissions"
         ) from None
-    print(f"Podcast {terminal_text(podcast.title)} added")
+    prefix, suffix = "Podcast ", " added"
+    budget = _PODCAST_LINE_MAX_CHARS - len(prefix) - len(suffix)
+    preview = _terminal_title_preview(podcast.title, budget)
+    print(f"{prefix}{preview}{suffix}")
 
 
 @cli.command(name="podcasts")
@@ -360,9 +366,14 @@ def list_podcasts():
         all_podcasts = list_all_podcasts()
     except SharedDirectoryError as error:
         feeds = "; ".join(
-            f"{terminal_text(podcast.title)} <{_feed_origin(podcast.feed.url)}>"
-            for podcast in error.shared
+            f"{_terminal_title_preview(podcast.title, _PODCAST_LINE_MAX_CHARS)} "
+            f"<{_feed_origin(podcast.feed.url)}>"
+            for podcast in error.shared[:_SHARED_FEED_PREVIEW_LIMIT]
         )
+        omitted = len(error.shared) - _SHARED_FEED_PREVIEW_LIMIT
+        if omitted > 0:
+            noun = "feed" if omitted == 1 else "feeds"
+            feeds += f"; {omitted} more conflicting {noun}"
         raise typer.BadParameter(
             f"{error}; re-add one of these feeds with a distinct --podcast-dir: "
             f"{feeds}"

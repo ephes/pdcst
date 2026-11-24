@@ -1,5 +1,10 @@
 # Unreleased
 
+* Limit the `add` confirmation to 160 characters with an escaped title preview.
+
+* Limit shared-directory diagnostics to five escaped title previews and feed
+  origins, with a count of any additional conflicting feeds.
+
 * Skip unrelated unresolved legacy directories in refresh and download
   ownership checks. Report a directory error for a selected symlink loop.
 

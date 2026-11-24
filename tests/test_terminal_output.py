@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import httpx
 import pytest
+import typer
 from typer.testing import CliRunner
 
 import pdcst
@@ -80,11 +81,65 @@ def test_add_escapes_feed_title(subscribed):
     assert subscribed.output == f"Podcast {SHOW_TEXT} added\n"
 
 
+@pytest.mark.parametrize(
+    "title,preview",
+    [
+        pytest.param("Ordinary Show", "Ordinary Show", id="ordinary"),
+        pytest.param(
+            "My Show" + "\r\n" * 1000,
+            "My Show" + "\\u000d\\u000a" * 11 + "\\u000d…",
+            id="long-with-controls",
+        ),
+    ],
+)
+def test_add_bounds_confirmation(monkeypatch, podcast, title, preview):
+    podcast.title = title
+    monkeypatch.setattr(pdcst, "subscribe", lambda *_args: podcast)
+
+    result = CliRunner().invoke(pdcst.cli, ["add", "https://example.test/feed"])
+
+    assert result.exit_code == 0, result.output
+    assert len(result.output.rstrip("\n")) <= 160
+    assert_inert(result.output)
+    assert result.output == f"Podcast {preview} added\n"
+    assert podcast.title == title
+
+
 def test_podcasts_escapes_stored_titles(subscribed):
     result = CliRunner().invoke(pdcst.cli, ["podcasts"], color=False)
     assert result.exit_code == 0, result.output
     assert_inert(result.output)
     assert result.output.splitlines() == [f"{SHOW_TEXT} - 2 episodes"]
+
+
+def test_podcasts_bounds_shared_directory_diagnostic(tmp_path, monkeypatch, podcast):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    shows = []
+    for index in range(12):
+        show = deepcopy(podcast)
+        show.title = f"Shared {index}\r\n" + "A" * 5000
+        host = "a" * 5000 if index == 0 else "example.test:8443"
+        show.feed.url = f"https://user:secret@{host}/private-{index}?token=x#fragment"
+        shows.append(show)
+    PodcastRepository(tmp_path).add_list(shows)
+
+    with pytest.raises(typer.BadParameter) as raised:
+        pdcst.list_podcasts()
+
+    message = str(raised.value)
+    assert len(message) < 1500
+    assert message.splitlines() == [message]
+    assert_inert(message)
+    assert "distinct --podcast-dir" in message
+    first_preview = "Shared 0\\u000d\\u000a" + "A" * 139 + "…"
+    assert f"{first_preview} <feed origin unavailable>" in message
+    for index in range(1, 5):
+        preview = f"Shared {index}\\u000d\\u000a" + "A" * 139 + "…"
+        assert f"{preview} <https://example.test:8443>" in message
+    assert "Shared 5" not in message
+    assert message.endswith("7 more conflicting feeds")
+    for private in ("user:", "secret@", "/private-", "?token=", "#fragment"):
+        assert private not in message
 
 
 @pytest.mark.parametrize(
