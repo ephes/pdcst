@@ -945,3 +945,62 @@ def test_refresh_treats_impossible_retained_name_as_absent(
 
     assert EpisodeRepository(episodes.base_dir).list()[0].audio_file is None
     assert saved.read_bytes() == b"synthetic audio"
+
+
+@pytest.mark.parametrize("operation", ["refresh", "download"])
+@pytest.mark.parametrize("select_loop", [False, True])
+def test_subscription_legacy_loop_is_local(
+    tmp_path, monkeypatch, podcast, episode, operation, select_loop
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    directory = tmp_path / podcast.directory
+    podcast.directory = None
+    looped = copy.deepcopy(podcast)
+    looped.title = "Looped Show"
+    looped.feed.url = "https://example.test/loop"
+    loop = tmp_path / "looped_show"
+    loop.symlink_to(loop.name)
+    shows = PodcastRepository(tmp_path)
+    shows.add_list([podcast, looped])
+    episodes = EpisodeRepository(directory)
+    episodes.add(episode)
+    before = shows.path.read_bytes(), episodes.path.read_bytes()
+    resolve = Path.resolve
+
+    def resolve_with_legacy_loop_error(self, *args, **kwargs):
+        if self == loop:
+            raise RuntimeError(f"Symlink loop from {loop}")
+        return resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve_with_legacy_loop_error)
+    assert {show.title for show in shows.list()} == {podcast.title, looped.title}
+    selected = looped if select_loop else podcast
+
+    class Parser:
+        def get(self, *_):
+            return copy.deepcopy(selected), [episode]
+
+    def transfer(_url, stage, **_kwargs):
+        assert not select_loop
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    if operation == "refresh":
+        monkeypatch.setattr(pdcst, "FeedParserRepository", Parser)
+        args = ["add", selected.feed.url]
+    else:
+        args = ["download", selected.title, episode.title]
+    result = CliRunner().invoke(pdcst.cli, args, color=False)
+
+    if select_loop:
+        assert result.exit_code == 2, result.exception
+        assert "directory is unavailable or unsafe" in result.output
+        assert str(loop) not in result.output
+        assert (shows.path.read_bytes(), episodes.path.read_bytes()) == before
+    else:
+        assert result.exit_code == 0, result.exception
+        assert shows.all[podcast.feed.url].directory == directory.name
+        assert shows.all[looped.feed.url].directory is None
+        saved = episodes.all[episode.guid]
+        if operation == "download":
+            assert (directory / saved.audio_file).read_bytes() == b"synthetic audio"

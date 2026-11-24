@@ -102,7 +102,11 @@ def contained_path(root, *parts):
             or not path.parts
         ):
             raise ValueError("Destination must be relative to PDCST_HOME")
-    destination = root.joinpath(*parts).resolve()
+    try:
+        destination = root.joinpath(*parts).resolve()
+    except RuntimeError:
+        # Path.resolve raises RuntimeError for symlink loops on Python 3.10.
+        raise ValueError("Podcast directory is unavailable or unsafe") from None
     if destination == root or root not in destination.parents:
         raise ValueError("Destination escapes PDCST_HOME")
     return destination
@@ -111,6 +115,14 @@ def contained_path(root, *parts):
 def _subscription_directory_key(root, directory):
     """Identify directories for cross-feed ownership on every host."""
     return unicodedata.normalize("NFC", str(contained_path(root, directory))).casefold()
+
+
+def _subscription_owner_key(root, directory):
+    """Return a catalog directory key only if it can own a contained path."""
+    try:
+        return _subscription_directory_key(root, directory)
+    except ValueError:
+        return None
 
 
 def subscription_directory(directory, root=None):
@@ -187,11 +199,9 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo, root
         for item in subscriptions:
             if item.feed.url == feed_url:
                 continue
-            try:
-                owners.add(_subscription_directory_key(root, item.directory))
-            except ValueError:
-                # Unsafe legacy paths cannot own a contained destination.
-                continue
+            key = _subscription_owner_key(root, item.directory)
+            if key is not None:
+                owners.add(key)
 
         def owned(directory):
             return _subscription_directory_key(root, directory) in owners

@@ -134,8 +134,9 @@ each other subscription directory once; numbered suffix trials use that index.
 Existing cross-feed directory sharing is also rejected on refresh. Re-add one
 feed with a distinct `--podcast-dir` to separate future imports. Old JSON and audio
 files stay in their old directory; download associations are not migrated to the
-new directory automatically. An unsafe legacy path does not block unrelated
-subscriptions, but must be corrected before using that subscription.
+new directory automatically. An unrelated unsafe legacy path, including a
+symlink loop, is skipped in directory ownership checks during refresh and
+download. If the selected directory is unsafe, correct it before retrying.
 
 Feed requests accept only successful HTTP responses, follow at most five redirects,
 and retain at most 8 MiB of uncompressed bytes. Compressed responses are rejected. Decimal Content-Length headers are compared
