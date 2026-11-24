@@ -1543,7 +1543,7 @@ class PodcastRepository(JsonRepository):
         return podcast
 
     def list(self, additional_attributes=None):
-        from . import _subscription_directory_key
+        from . import _subscription_owner_key
 
         podcasts = [
             self._listed_podcast(stored, additional_attributes)
@@ -1551,12 +1551,9 @@ class PodcastRepository(JsonRepository):
         ]
         groups = {}
         for podcast in podcasts:
-            try:
-                key = _subscription_directory_key(self.base_dir, podcast.directory)
-            except (ValueError, RuntimeError):
-                # Path.resolve can raise RuntimeError for symlink loops on Python 3.10.
-                continue
-            groups.setdefault(key, []).append(podcast)
+            key = _subscription_owner_key(self.base_dir, podcast.directory)
+            if key is not None:
+                groups.setdefault(key, []).append(podcast)
         shared = [
             podcast for group in groups.values() if len(group) > 1 for podcast in group
         ]
@@ -1571,9 +1568,9 @@ class PodcastRepository(JsonRepository):
         if stored is None:
             raise DownloadConflict("Podcast subscription changed; retry download")
         current = self._listed_podcast(stored)
-        if stored.directory is not None:
-            return stored, current, contained_path(self.base_dir, current.directory)
         try:
+            if stored.directory is not None:
+                return stored, current, contained_path(self.base_dir, current.directory)
             resolved = subscription_directory(current.directory, root=self.base_dir)
         except ValueError as error:
             raise DownloadConflict(
@@ -1583,18 +1580,14 @@ class PodcastRepository(JsonRepository):
         return stored, current, resolved
 
     def _check_legacy_directory_owner(self, rows, url, target):
-        from . import _subscription_directory_key
+        from . import _subscription_owner_key
 
         for other_url, other in rows.items():
             if other_url == url:
                 continue
-            try:
-                other_key = _subscription_directory_key(
-                    self.base_dir, self._listed_podcast(other).directory
-                )
-            except ValueError:
-                # Unsafe legacy paths cannot own a contained destination.
-                continue
+            other_key = _subscription_owner_key(
+                self.base_dir, self._listed_podcast(other).directory
+            )
             if other_key == target:
                 raise DownloadConflict(
                     "Podcast directory is already used by another feed; "

@@ -1,5 +1,6 @@
 """Synthetic subscription root replacement barriers."""
 
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -222,7 +223,7 @@ def test_root_replaced_during_episode_admission_leaves_replacement_untouched(
     assert not list(moved.rglob(".pdcst-refresh-*"))
 
 
-def test_root_symlink_retargeted_during_fetch_is_refused(
+def test_settings_symlink_retargeted_during_fetch_keeps_admitted_root(
     tmp_path, monkeypatch, podcast, episode
 ):
     first, second = tmp_path / "first", tmp_path / "second"
@@ -236,7 +237,6 @@ def test_root_symlink_retargeted_during_fetch_is_refused(
     (second / "home" / "podcasts.json").write_bytes(
         (first / "home" / "podcasts.json").read_bytes()
     )
-    before = {p.relative_to(first): p.read_bytes() for p in first.rglob("*.json")}
 
     class Parser:
         def get(self, *_):
@@ -244,15 +244,13 @@ def test_root_symlink_retargeted_during_fetch_is_refused(
             alias.symlink_to(second, target_is_directory=True)
             return podcast, [episode]
 
-    with pytest.raises(StoreWriteError, match="outside the admitted storage root"):
-        pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser())
+    pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser())
     assert sorted(p.relative_to(second) for p in second.rglob("*")) == [
         Path("home"),
         Path("home/podcasts.json"),
     ]
-    assert before == {
-        p.relative_to(first): p.read_bytes() for p in first.rglob("*.json")
-    }
+    assert PodcastRepository(first / "home").list()[0].episodes_count == 1
+    assert episode.guid in EpisodeRepository(first / "home" / podcast.directory).all
     assert not list(first.rglob(".pdcst-refresh-*"))
 
 
@@ -271,3 +269,63 @@ def test_relative_subscription_repository_admits_episode_directory(
     )
     assert (tmp_path / "data" / "podcasts.json").is_file()
     assert (tmp_path / "data" / podcast.directory / "episodes.json").is_file()
+
+
+def test_subscription_uses_injected_root_for_paths_and_owners(
+    tmp_path, monkeypatch, podcast, episode
+):
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    monkeypatch.setattr(pdcst.settings, "root", configured)
+    root = tmp_path / "injected"
+    shows = PodcastRepository(root)
+    owner = copy.deepcopy(podcast)
+    owner.feed.url = "https://example.test/owner"
+    owner.directory = "owner"
+    shows.add(owner)
+    (root / "alias").symlink_to("owner")
+    (configured / "available").symlink_to(tmp_path / "outside")
+    alias = root / "available"
+    alias.symlink_to("episodes")
+    expected_dir = root / "episodes"
+    expected_dir.mkdir()
+    before = shows.path.read_bytes()
+
+    class Parser:
+        def get(self, _url, directory, _pattern):
+            fresh = copy.deepcopy(podcast)
+            fresh.directory = directory
+            return fresh, [episode]
+
+    with pytest.raises(ValueError, match="already used by another feed"):
+        pdcst.subscribe(podcast.feed.url, "{index}.mp3", "alias", Parser(), shows)
+    assert shows.path.read_bytes() == before
+    assert not list(root.rglob("episodes.json"))
+
+    result = pdcst.subscribe(
+        podcast.feed.url, "{index}.mp3", "available", Parser(), shows
+    )
+    assert shows.all[podcast.feed.url].directory == result.directory == "available"
+    assert episode.guid in EpisodeRepository(expected_dir).all
+    assert not list(configured.rglob("*.json"))
+
+
+def test_subscription_checks_generated_filenames_in_injected_root(
+    tmp_path, monkeypatch, podcast, episode
+):
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    (configured / podcast.directory).mkdir()
+    (configured / podcast.directory / "1.mp3").symlink_to(tmp_path / "outside")
+    monkeypatch.setattr(pdcst.settings, "root", configured)
+    shows = PodcastRepository(tmp_path / "injected")
+
+    class Parser:
+        def get(self, *_):
+            podcast.file_name_pattern = "{index}.mp3"
+            return podcast, [episode]
+
+    pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+
+    assert episode.guid in EpisodeRepository(shows.base_dir / podcast.directory).all
+    assert not list(configured.rglob("*.json"))

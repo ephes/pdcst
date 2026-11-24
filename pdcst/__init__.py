@@ -102,7 +102,11 @@ def contained_path(root, *parts):
             or not path.parts
         ):
             raise ValueError("Destination must be relative to PDCST_HOME")
-    destination = root.joinpath(*parts).resolve()
+    try:
+        destination = root.joinpath(*parts).resolve()
+    except RuntimeError:
+        # Path.resolve raises RuntimeError for symlink loops on Python 3.10.
+        raise ValueError("Podcast directory is unavailable or unsafe") from None
     if destination == root or root not in destination.parents:
         raise ValueError("Destination escapes PDCST_HOME")
     return destination
@@ -111,6 +115,14 @@ def contained_path(root, *parts):
 def _subscription_directory_key(root, directory):
     """Identify directories for cross-feed ownership on every host."""
     return unicodedata.normalize("NFC", str(contained_path(root, directory))).casefold()
+
+
+def _subscription_owner_key(root, directory):
+    """Return a catalog directory key only if it can own a contained path."""
+    try:
+        return _subscription_directory_key(root, directory)
+    except ValueError:
+        return None
 
 
 def subscription_directory(directory, root=None):
@@ -146,19 +158,22 @@ def subscribe(
     """
     Subscribe to a podcast feed url.
     """
-    if podcast_dir is not None:
-        subscription_directory(podcast_dir)
-    if fp_repo is None:
-        fp_repo = FeedParserRepository()
     if podcasts_repo is None:
         podcasts_repo = PodcastRepository(Path(settings.root).resolve())
+    root = podcasts_repo.base_dir.absolute()
+    if podcast_dir is not None:
+        subscription_directory(podcast_dir, root=root)
+    if fp_repo is None:
+        fp_repo = FeedParserRepository()
     with podcasts_repo.admitted() as admitted:
         admitted._check_intents()
         with admitted.feed_lock(feed_url) as locked:
-            return _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, locked)
+            return _subscribe(
+                feed_url, name_pattern, podcast_dir, fp_repo, locked, root
+            )
 
 
-def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
+def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo, root):
     """Acquire and publish while the caller holds the per-feed lock."""
     podcast, episodes = fp_repo.get(feed_url, podcast_dir, name_pattern)
     with podcasts_repo._lock():
@@ -173,7 +188,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
             else:
                 legacy = podcast.title.lower().replace(" ", "_")
                 try:
-                    legacy_path = contained_path(settings.root, legacy)
+                    legacy_path = contained_path(root, legacy)
                 except ValueError:
                     pass
                 else:
@@ -184,14 +199,12 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
         for item in subscriptions:
             if item.feed.url == feed_url:
                 continue
-            try:
-                owners.add(_subscription_directory_key(settings.root, item.directory))
-            except ValueError:
-                # Unsafe legacy paths cannot own a contained destination.
-                continue
+            key = _subscription_owner_key(root, item.directory)
+            if key is not None:
+                owners.add(key)
 
         def owned(directory):
-            return _subscription_directory_key(settings.root, directory) in owners
+            return _subscription_directory_key(root, directory) in owners
 
         if owned(podcast.directory):
             if podcast_dir is not None or existing is not None:
@@ -204,7 +217,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
             while owned(podcast.directory):
                 podcast.directory = f"{base}_{suffix}"
                 suffix += 1
-        episode_dir = subscription_directory(podcast.directory)
+        episode_dir = subscription_directory(podcast.directory, root=root)
 
         def prepare(episodes_by_guid):
             if episodes_by_guid:
@@ -212,7 +225,7 @@ def _subscribe(feed_url, name_pattern, podcast_dir, fp_repo, podcasts_repo):
                 render_name = podcast.audio_filename_renderer()
                 for episode in episodes_by_guid.values():
                     name = render_name(episode)
-                    contained_path(settings.root, podcast.directory, name)
+                    contained_path(root, podcast.directory, name)
                     key = unicodedata.normalize("NFC", name).casefold()
                     if key in names:
                         raise FilenamePatternError(

@@ -1,5 +1,11 @@
 # Unreleased
 
+* Skip unrelated unresolved legacy directories in refresh and download
+  ownership checks. Report a directory error for a selected symlink loop.
+
+* Use the subscription repository’s root throughout import, including path
+  validation, ownership checks and episode metadata publication.
+
 * Identify the stored `published` or `feed.updated` field when its offset
   would place the timestamp outside the UTC date range.
 
