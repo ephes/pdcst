@@ -218,8 +218,10 @@ line/paragraph separators and bidirectional override/isolate marks as visible
 lines to a listing. Each `podcasts` listing line and the `add` confirmation
 use a 160-character display budget, including the episode count or confirmation
 text. Shortened titles end in `…`, and each escape stays intact.
-Stored titles keep their original text, and title matching for
-`episodes` and `download` uses that original text. Library callers that print
+Stored titles keep their original text. Title selection for `episodes` and
+`download` uses NFC normalization and case folding, so composed and decomposed
+spellings match. Canonically equivalent exact titles are ambiguous.
+Library callers that print
 `Podcast`/`Episode` objects themselves can use `pdcst.terminal_text()`.
 
 ## Download

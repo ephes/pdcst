@@ -277,14 +277,18 @@ class SelectionError(ValueError):
     """A title identifier is blank or ambiguous."""
 
 
+def _title_key(title):
+    return unicodedata.normalize("NFC", title).casefold()
+
+
 def _find_title(items, identifier, kind, unique):
-    key = identifier.casefold()
+    key = _title_key(identifier)
     if unique and not key.strip():
         raise SelectionError(f"Empty {kind} identifier; use a title")
     first_match = first_exact = None
     match_count = exact_count = 0
     for item in items:
-        title = item.title.casefold()
+        title = _title_key(item.title)
         if key not in title:
             continue
         if not unique:

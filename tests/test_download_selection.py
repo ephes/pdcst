@@ -449,3 +449,26 @@ def test_invalid_stored_filename_pattern_precedes_episode_read(
     result = CliRunner().invoke(pdcst.cli, ["download", podcast.title, "episode"])
     assert result.exit_code != 0
     assert "Invalid filename pattern" in result.output
+
+
+@pytest.mark.parametrize("kind", ["podcast", "episode"])
+def test_title_selection_accepts_canonical_equivalents(monkeypatch, podcast, kind):
+    from types import SimpleNamespace
+
+    partial = SimpleNamespace(title="Cafe\u0301 Notes")
+    exact = SimpleNamespace(title="Café")
+    items = [partial, exact]
+    if kind == "podcast":
+        monkeypatch.setattr(pdcst, "list_all_podcasts", lambda: items)
+        select = pdcst.find_podcast_by_identifier
+    else:
+        monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: items)
+
+        def select(identifier, **kwargs):
+            return pdcst.find_episode_by_identifier(podcast, identifier, **kwargs)
+
+    assert select("CAFÉ") is partial
+    assert select("CAFE\u0301", unique=True) is exact
+    items.append(SimpleNamespace(title="Cafe\u0301"))
+    with pytest.raises(pdcst.SelectionError, match=rf"Ambiguous {kind} \(2 matches\)"):
+        select("CAFÉ", unique=True)

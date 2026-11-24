@@ -1,5 +1,8 @@
 # Unreleased
 
+* Match canonically equivalent Unicode podcast and episode titles during
+  selection, preserving exact-match precedence and ambiguity checks.
+
 * Limit the `add` confirmation to 160 characters with an escaped title preview.
 
 * Limit shared-directory diagnostics to five escaped title previews and feed
