@@ -351,7 +351,10 @@ def add(
             "Unable to update local storage: filesystem error; "
             "check PDCST_HOME and write permissions"
         ) from None
-    print(f"Podcast {terminal_text(podcast.title)} added")
+    prefix, suffix = "Podcast ", " added"
+    budget = _PODCAST_LINE_MAX_CHARS - len(prefix) - len(suffix)
+    preview = _terminal_title_preview(podcast.title, budget)
+    print(f"{prefix}{preview}{suffix}")
 
 
 @cli.command(name="podcasts")

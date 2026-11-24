@@ -215,9 +215,10 @@ Titles come from feeds and are displayed safely: `add`, `podcasts` and `episodes
 print control characters (such as CR, LF, TAB, ESC and C1 controls), Unicode
 line/paragraph separators and bidirectional override/isolate marks as visible
 `\uXXXX` escapes, so a feed cannot rewrite, hide or reorder terminal output or add
-lines to a listing. `podcasts` uses a 160-character display budget for the title
-and episode count together. It marks shortened titles with `…` and keeps
-each escape intact. Stored titles keep their original text, and title matching for
+lines to a listing. Each `podcasts` listing line and the `add` confirmation
+use a 160-character display budget, including the episode count or confirmation
+text. Shortened titles end in `…`, and each escape stays intact.
+Stored titles keep their original text, and title matching for
 `episodes` and `download` uses that original text. Library callers that print
 `Podcast`/`Episode` objects themselves can use `pdcst.terminal_text()`.
 

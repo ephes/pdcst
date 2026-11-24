@@ -81,6 +81,30 @@ def test_add_escapes_feed_title(subscribed):
     assert subscribed.output == f"Podcast {SHOW_TEXT} added\n"
 
 
+@pytest.mark.parametrize(
+    "title,preview",
+    [
+        pytest.param("Ordinary Show", "Ordinary Show", id="ordinary"),
+        pytest.param(
+            "My Show" + "\r\n" * 1000,
+            "My Show" + "\\u000d\\u000a" * 11 + "\\u000d…",
+            id="long-with-controls",
+        ),
+    ],
+)
+def test_add_bounds_confirmation(monkeypatch, podcast, title, preview):
+    podcast.title = title
+    monkeypatch.setattr(pdcst, "subscribe", lambda *_args: podcast)
+
+    result = CliRunner().invoke(pdcst.cli, ["add", "https://example.test/feed"])
+
+    assert result.exit_code == 0, result.output
+    assert len(result.output.rstrip("\n")) <= 160
+    assert_inert(result.output)
+    assert result.output == f"Podcast {preview} added\n"
+    assert podcast.title == title
+
+
 def test_podcasts_escapes_stored_titles(subscribed):
     result = CliRunner().invoke(pdcst.cli, ["podcasts"], color=False)
     assert result.exit_code == 0, result.output
