@@ -1,5 +1,12 @@
 # Unreleased
 
+* Recheck subscription directory ownership during episode browsing and report a
+  retry when the selected directory changes. Browsing still works on read-only
+  stores.
+
+* Match canonically equivalent Unicode podcast and episode titles during
+  selection, preserving exact-match precedence and ambiguity checks.
+
 * Limit the `add` confirmation to 160 characters with an escaped title preview.
 
 * Limit shared-directory diagnostics to five escaped title previews and feed

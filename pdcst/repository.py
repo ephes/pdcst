@@ -1561,13 +1561,19 @@ class PodcastRepository(JsonRepository):
             raise SharedDirectoryError(self.path, podcasts, shared)
         return podcasts
 
+    def _subscription_generation(self, rows, url):
+        stored = rows[url]
+        return stored, self._listed_podcast(stored)
+
     def _download_subscription_selection(self, rows, url):
         from . import contained_path, subscription_directory
 
-        stored = rows.get(url)
-        if stored is None:
-            raise DownloadConflict("Podcast subscription changed; retry download")
-        current = self._listed_podcast(stored)
+        try:
+            stored, current = self._subscription_generation(rows, url)
+        except KeyError:
+            raise DownloadConflict(
+                "Podcast subscription changed; retry download"
+            ) from None
         try:
             if stored.directory is not None:
                 return stored, current, contained_path(self.base_dir, current.directory)
@@ -1579,7 +1585,7 @@ class PodcastRepository(JsonRepository):
         current.directory = str(resolved.relative_to(self.base_dir.resolve()))
         return stored, current, resolved
 
-    def _check_legacy_directory_owner(self, rows, url, target):
+    def _check_directory_owner(self, rows, url, target):
         from . import _subscription_owner_key
 
         for other_url, other in rows.items():
@@ -1593,6 +1599,66 @@ class PodcastRepository(JsonRepository):
                     "Podcast directory is already used by another feed; "
                     "set a distinct directory in podcasts.json"
                 )
+
+    def _browse_directory(self, podcast, *, expected=None):
+        from . import contained_path
+
+        rows = self._fetch_all()
+        url = podcast.feed.url
+        try:
+            _, current = self._subscription_generation(rows, url)
+        except KeyError:
+            current = None
+        changed = "Podcast subscription directory changed; retry browsing"
+        if current is None or current.directory != podcast.directory:
+            raise StoreReadError(Path(EpisodeRepository.name), changed)
+        try:
+            directory = contained_path(self.base_dir, current.directory)
+        except (OSError, RuntimeError, ValueError):
+            raise StoreReadError(
+                Path(EpisodeRepository.name),
+                "podcast episode directory is unavailable or unsafe; retry browsing",
+            ) from None
+        if expected is not None and directory != expected:
+            raise StoreReadError(Path(EpisodeRepository.name), changed)
+        target = unicodedata.normalize("NFC", str(directory)).casefold()
+        try:
+            self._check_directory_owner(rows, url, target)
+        except DownloadConflict as error:
+            raise StoreReadError(Path(EpisodeRepository.name), str(error)) from None
+        return directory
+
+    def list_episodes(self, podcast):
+        """Read one subscription's episodes and confirm its directory before returning."""
+        try:
+            with self.admitted(create=False) as admitted:
+                directory = admitted._browse_directory(podcast)
+                with ExitStack() as stack:
+                    try:
+                        directory.lstat()
+                    except FileNotFoundError:
+                        episodes = []
+                        check_directory = admitted._check_directory
+                    else:
+                        selected = stack.enter_context(
+                            EpisodeRepository(directory).admitted(
+                                create=False, parent=admitted
+                            )
+                        )
+                        episodes = selected.list(
+                            additional_attributes={"podcast": podcast}
+                        )
+                        check_directory = selected._check_directory
+
+                    # A catalog writer may have committed while the read was open.
+                    admitted._browse_directory(podcast, expected=directory)
+                    check_directory()
+                    return episodes
+        except (OSError, StoreWriteError):
+            raise StoreReadError(
+                Path(EpisodeRepository.name),
+                "podcast episode directory is unavailable or unsafe; retry browsing",
+            ) from None
 
     @contextmanager
     def download_subscription(self, podcast):
@@ -1622,7 +1688,7 @@ class PodcastRepository(JsonRepository):
                     directory = current.directory
                     if stored.directory is None:
                         target = _subscription_directory_key(locked.base_dir, directory)
-                        locked._check_legacy_directory_owner(rows, url, target)
+                        locked._check_directory_owner(rows, url, target)
                         rows[url] = stored.copy(update={"directory": directory})
                         locked._serialize_models(rows)
 
@@ -1657,7 +1723,7 @@ class PodcastRepository(JsonRepository):
                             rows = locked._fetch_all()
                             if rows.get(url) != stored:
                                 raise DownloadConflict("Podcast subscription changed")
-                            locked._check_legacy_directory_owner(rows, url, target)
+                            locked._check_directory_owner(rows, url, target)
                             rows[url] = stored.copy(update={"directory": directory})
                             pin = copy(locked)
                             pin._check_directory = check_pin

@@ -260,31 +260,28 @@ def list_all_podcasts(podcasts=None) -> list[Podcast]:
 
 def list_all_episodes(podcast) -> list[Episode]:
     """
-    List all episodes for a podcast.
+    List all episodes for a current subscription.
     """
-    try:
-        directory = contained_path(settings.root, podcast.directory)
-    except (OSError, RuntimeError, ValueError):
-        raise StoreReadError(
-            Path(EpisodeRepository.name),
-            "podcast episode directory is unavailable or unsafe",
-        ) from None
-    episodes_repo = EpisodeRepository(directory)
-    return episodes_repo.list(additional_attributes={"podcast": podcast})
+    subscriptions = PodcastRepository(Path(settings.root).resolve())
+    return subscriptions.list_episodes(podcast)
 
 
 class SelectionError(ValueError):
     """A title identifier is blank or ambiguous."""
 
 
+def _title_key(title):
+    return unicodedata.normalize("NFC", title).casefold()
+
+
 def _find_title(items, identifier, kind, unique):
-    key = identifier.casefold()
+    key = _title_key(identifier)
     if unique and not key.strip():
         raise SelectionError(f"Empty {kind} identifier; use a title")
     first_match = first_exact = None
     match_count = exact_count = 0
     for item in items:
-        title = item.title.casefold()
+        title = _title_key(item.title)
         if key not in title:
             continue
         if not unique:

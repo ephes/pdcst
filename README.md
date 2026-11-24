@@ -192,6 +192,10 @@ its symlink targets under `PDCST_HOME`.
 Every browse reloads current JSON without writing it, including repeated API calls
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
+Episode browsing checks that the selected feed still owns the directory before
+and after reading its episodes. If the directory changes during selection or
+reading, rerun `pdcst episodes` to make a fresh selection. API callers can
+reselect the subscription before retrying `list_all_episodes(podcast)`.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
 If a legacy lookup encounters a symlink loop, the subscription stays unpinned
@@ -218,8 +222,10 @@ line/paragraph separators and bidirectional override/isolate marks as visible
 lines to a listing. Each `podcasts` listing line and the `add` confirmation
 use a 160-character display budget, including the episode count or confirmation
 text. Shortened titles end in `…`, and each escape stays intact.
-Stored titles keep their original text, and title matching for
-`episodes` and `download` uses that original text. Library callers that print
+Stored titles keep their original text. Title selection for `episodes` and
+`download` uses NFC normalization and case folding, so composed and decomposed
+spellings match. Multiple canonically equivalent exact titles are ambiguous.
+Library callers that print
 `Podcast`/`Episode` objects themselves can use `pdcst.terminal_text()`.
 
 ## Download
