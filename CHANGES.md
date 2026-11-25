@@ -1,7 +1,9 @@
 # Unreleased
 
 * Sync the containing directory when retrying intent cleanup after unlink,
-  even if the marker is already gone.
+  even if the marker is already gone. Refresh cleanup retires only markers it
+  tried to write, so a sync failure before any marker exists still removes the
+  refresh backups without a recovery warning.
 
 * Refuse multiply linked store locks both before waiting and after acquiring
   the lock.

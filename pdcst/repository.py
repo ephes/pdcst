@@ -1339,6 +1339,8 @@ class EpisodeRepository(JsonRepository):
                     podcasts_repo.base_dir / f".pdcst-refresh-{token}.previous"
                 )
                 markers.append((podcasts_repo, podcasts_repo.base_dir / REFRESH_INTENT))
+            # Only markers whose creation was attempted need durable retirement.
+            attempted = []
             retain = False
             imported = False
             completed = False
@@ -1370,6 +1372,7 @@ class EpisodeRepository(JsonRepository):
                     repo._check_directory()
                 for repo, path in markers:
                     repo._check_directory()
+                    attempted.append((repo, path))
                     write_intent(
                         path,
                         details,
@@ -1424,7 +1427,7 @@ class EpisodeRepository(JsonRepository):
                     # synced rollback. Keep backups if marker retirement fails.
                     pending_error = not completed
                     try:
-                        for repo, path in markers:
+                        for repo, path in attempted:
                             clear_intent(
                                 path,
                                 **(
