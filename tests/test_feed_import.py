@@ -258,6 +258,61 @@ def test_invalid_episode_date_warns(monkeypatch):
     assert [episode.guid for episode in episodes] == ["valid"]
 
 
+def test_atom_entry_dates_on_import_and_refresh(monkeypatch, tmp_path):
+    def atom_entry(guid, timestamps):
+        return (
+            f"<entry><id>{guid}</id><title>Episode</title>{timestamps}"
+            '<link rel="enclosure" href="https://example.com/a.mp3" type="audio/mpeg"/>'
+            "</entry>"
+        )
+
+    def refresh(updated_day):
+        entries = (
+            atom_entry(
+                "updated", f"<updated>2022-07-{updated_day:02}T12:00:00Z</updated>"
+            )
+            + atom_entry(
+                "published",
+                "<published>2022-07-01T12:00:00Z</published>"
+                "<updated>2022-07-04T12:00:00Z</updated>",
+            )
+            + atom_entry(
+                "fallback",
+                "<published>unknown</published><updated>2022-07-03T12:00:00Z</updated>",
+            )
+            + atom_entry("undated", "")
+            + atom_entry("invalid", "<updated>unknown</updated>")
+        )
+        document = feedparser.parse(
+            '<feed xmlns="http://www.w3.org/2005/Atom"><title>Podcast</title>'
+            f"{entries}</feed>"
+        )
+        monkeypatch.setattr(
+            FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
+        )
+        with pytest.warns(UserWarning) as skipped:
+            podcast = pdcst.subscribe(
+                "https://example.com/feed",
+                "{index}.mp3",
+                None,
+                podcasts_repo=PodcastRepository(tmp_path),
+            )
+        stored = EpisodeRepository(tmp_path / podcast.directory).list()
+        assert [(row.guid, row.index, row.published) for row in stored] == [
+            ("published", 1, DATE),
+            ("updated", 2, DATE.replace(day=updated_day)),
+            ("fallback", 3, DATE.replace(day=3)),
+        ]
+        assert podcast.episodes_count == 3
+        assert podcast.feed.updated == DATE.replace(day=max(3, updated_day))
+        assert [str(warning.message) for warning in skipped] == [
+            "Skipped 2 unusable feed entry/entries"
+        ]
+
+    refresh(2)
+    refresh(5)
+
+
 def test_subscribe_without_channel_date(monkeypatch, tmp_path):
     document = feedparser.parse(
         f"<rss><channel><title>Podcast</title>{item()}</channel></rss>"
