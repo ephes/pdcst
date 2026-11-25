@@ -1,5 +1,8 @@
 # Unreleased
 
+* Sync the containing directory when retrying intent cleanup after unlink,
+  even if the marker is already gone.
+
 * Refuse multiply linked store locks both before waiting and after acquiring
   the lock.
 

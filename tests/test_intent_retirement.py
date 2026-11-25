@@ -1,6 +1,7 @@
 """Committed publications remain successful when intent retirement fails."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,49 @@ from pdcst.repository import (
     REFRESH_INTENT,
     PodcastRepository,
     StoreReadError,
+    clear_intent,
 )
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+def test_clear_intent_retries_parent_sync_after_unlink(tmp_path, monkeypatch, admitted):
+    marker = tmp_path / AUDIO_INTENT
+    marker.write_text("{}", encoding="utf-8")
+    real_sync = repository.sync_directory
+    attempts = []
+
+    def sync_parent(path, *, directory_fd=None):
+        assert path == tmp_path
+        assert not marker.exists()
+        attempts.append(directory_fd)
+        if len(attempts) == 1:
+            raise OSError("synthetic retirement sync failure")
+        if directory_fd is not None:
+            assert os.path.samestat(os.fstat(directory_fd), tmp_path.stat())
+        real_sync(path, directory_fd=directory_fd)
+
+    monkeypatch.setattr(repository, "sync_directory", sync_parent)
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if admitted else None
+    try:
+        with pytest.raises(OSError, match="synthetic retirement sync failure"):
+            clear_intent(marker, directory_fd=descriptor)
+        assert not marker.exists()
+
+        clear_intent(marker, directory_fd=descriptor)
+        assert len(attempts) == 2
+        if admitted:
+            assert attempts == [descriptor, descriptor]
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def test_clear_intent_leaves_missing_destination_tree_absent(tmp_path):
+    parent = tmp_path / "missing" / "episodes"
+
+    clear_intent(parent / AUDIO_INTENT)
+
+    assert not parent.parent.exists()
 
 
 @pytest.mark.parametrize("active_exception", [False, True])

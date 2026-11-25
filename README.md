@@ -773,6 +773,8 @@ Recovery is manual, with **all pdcst commands stopped**:
    audio only after verifying its enclosure and matching metadata yourself.
 4. Flush restored files and sync their containing directories. Only then remove
    every listed refresh marker (or the audio marker) and sync those directories.
+   If marker removal is retried after a sync failure, sync each existing marker
+   directory even if the marker is already absent.
    Retry browsing before any new refresh/download. Retained recovery generations
    can be retired manually after verifying the chosen pair.
 

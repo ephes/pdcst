@@ -167,17 +167,23 @@ def write_intent(path, details, *, directory_fd=None):
 
 
 def clear_intent(path, *, directory_fd=None):
+    """Durably retire an owned intent, including after an earlier unlink."""
+    opened_here = directory_fd is None
+    if opened_here:
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        except FileNotFoundError:
+            return
     try:
-        if directory_fd is None:
-            path.unlink()
-        else:
+        try:
             os.unlink(path.name, dir_fd=directory_fd)
-    except FileNotFoundError:
-        return
-    if directory_fd is None:
-        sync_directory(path.parent)
-    else:
+        except FileNotFoundError:
+            # An earlier attempt may have unlinked the marker without syncing.
+            pass
         sync_directory(path.parent, directory_fd=directory_fd)
+    finally:
+        if opened_here:
+            os.close(directory_fd)
 
 
 def _warn_completed_operation(message):
