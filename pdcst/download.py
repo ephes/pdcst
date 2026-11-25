@@ -2,7 +2,7 @@
 
 import logging
 import os
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 from time import monotonic
 
@@ -31,6 +31,41 @@ def _warn_cleanup_failure(message: str) -> None:
     # A broken logging handler must not change the transfer outcome.
     with suppress(Exception):
         logger.warning(message)
+
+
+@contextmanager
+def _audio_progress(total):
+    """Yield a byte counter that becomes silent after a display failure."""
+    progress = None
+
+    def stop():
+        nonlocal progress
+        if progress is not None:
+            renderer, progress = progress, None
+            with suppress(Exception):
+                renderer.stop()
+
+    def update(completed):
+        if progress is not None:
+            try:
+                progress.update(task, completed=completed)
+            except Exception:
+                stop()
+
+    try:
+        try:
+            progress = rich.progress.Progress(
+                rich.progress.BarColumn(bar_width=None),
+                rich.progress.DownloadColumn(),
+                rich.progress.TransferSpeedColumn(),
+            )
+            progress.start()
+            task = progress.add_task("Download", total=total)
+        except Exception:
+            stop()
+        yield update
+    finally:
+        stop()
 
 
 def download_with_progress(url, target_path, *, directory_fd=None):
@@ -181,12 +216,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                     )
                     check_deadline()
                     completed = 0
-                    with rich.progress.Progress(
-                        rich.progress.BarColumn(bar_width=None),
-                        rich.progress.DownloadColumn(),
-                        rich.progress.TransferSpeedColumn(),
-                    ) as progress:
-                        task = progress.add_task("Download", total=total)
+                    with _audio_progress(total) as update_progress:
                         next_update = monotonic() + PROGRESS_UPDATE_INTERVAL
                         check_deadline()
                         chunks = response.iter_raw()
@@ -212,9 +242,9 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                             completed += len(chunk)
                             now = monotonic()
                             if now >= next_update:
-                                progress.update(task, completed=completed)
+                                update_progress(completed)
                                 next_update = now + PROGRESS_UPDATE_INTERVAL
-                        progress.update(task, completed=completed)
+                        update_progress(completed)
                     check_deadline()
                     if completed == 0:
                         raise DownloadError("Empty audio response")

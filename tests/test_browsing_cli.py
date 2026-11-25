@@ -292,3 +292,29 @@ def test_episodes_refuses_subscription_directory_change(
         "new-store"
     )
     assert len(read(EpisodeRepository(browsing_store / "amber-store"))) == 2
+
+
+def test_episodes_refuses_directory_created_during_catalog_recheck(
+    browsing_store, monkeypatch
+):
+    monkeypatch.setattr(pdcst.settings, "root", browsing_store)
+    directory = browsing_store / "amber-store"
+    pending = directory.rename(browsing_store / "pending")
+    browse_directory = PodcastRepository._browse_directory
+
+    def browse_then_publish(self, podcast, *, expected=None):
+        selected = browse_directory(self, podcast, expected=expected)
+        if expected is not None and pending.exists():
+            pending.rename(directory)
+        return selected
+
+    monkeypatch.setattr(PodcastRepository, "_browse_directory", browse_then_publish)
+    runner = CliRunner()
+    args = ["episodes", "Amber Observatory"]
+    result = runner.invoke(pdcst.cli, args, env={"COLUMNS": "120"})
+
+    assert result.exit_code == 2, result.output
+    assert "Podcast subscription directory changed; retry browsing" in result.output
+    retry = runner.invoke(pdcst.cli, args)
+    assert retry.exit_code == 0, retry.output
+    assert retry.output.splitlines() == ["First Light", "Second Orbit"]

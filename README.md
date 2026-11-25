@@ -194,8 +194,10 @@ Every browse reloads current JSON without writing it, including repeated API cal
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 Episode browsing checks that the selected feed still owns the directory before
-and after reading its episodes. If the directory changes during selection or
-reading, rerun `pdcst episodes` to make a fresh selection. API callers can
+and after reading its episodes. If the directory was absent, browsing confirms
+its absence again after rechecking ownership before returning an empty listing.
+If the directory changes or appears during selection or reading, rerun
+`pdcst episodes` to make a fresh selection. API callers can
 reselect the subscription before retrying `list_all_episodes(podcast)`.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
@@ -449,6 +451,8 @@ the final body share one elapsed deadline; only the final body is retained and
 counted against the audio byte limit.
 Audio progress updates are spaced at least a tenth of a second apart during
 streaming. At the end of the stream the display receives the exact byte count.
+If the progress display fails, the transfer continues without progress updates.
+Response framing, storage checks and transfer limits still apply.
 Audio defaults to a 2 GiB byte limit (`PDCST_AUDIO_MAX_BYTES`) and a six-hour
 elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
 must be finite. Larger episodes can use higher limits. Declared lengths over the
