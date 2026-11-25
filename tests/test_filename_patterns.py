@@ -62,8 +62,11 @@ def test_ordinary_dotted_basename_is_portable(podcast, episode):
 def test_locale_sensitive_index_has_migration_error(
     podcast, episode, monkeypatch, locale_separator
 ):
+    locale_calls = []
+
     def simulated_format(value, spec):
         if spec.endswith("n"):
+            locale_calls.append(spec)
             return format(value, ",d").replace(",", locale_separator)
         return format(value, spec)
 
@@ -74,6 +77,8 @@ def test_locale_sensitive_index_has_migration_error(
         podcast.get_audio_file_name(episode)
     with pytest.raises(FilenamePatternError, match="replace.*n.*with.*d"):
         podcast.validate_audio_filename_pattern()
+    # The refusal happens before any locale-dependent formatting is attempted.
+    assert locale_calls == []
 
     podcast.file_name_pattern = "{index:,d}_{index:_d}.mp3"
     assert podcast.get_audio_file_name(episode) == "12,345_12_345.mp3"
