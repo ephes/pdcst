@@ -1,5 +1,11 @@
 # Unreleased
 
+* Accept an episode's update timestamp when it has no usable publication
+  timestamp, including Atom entries with only `updated`.
+
+* Break equal-date ties by GUID in feed previews so their episode indices match
+  a first import.
+
 * Recheck the selected enclosure format before transferring or publishing a
   download, including when the enclosure URL stays the same.
 

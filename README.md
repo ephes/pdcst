@@ -51,7 +51,9 @@ $ pdcst add https://python-podcast.de/show/feed/podcast/mp3/rss.xml --name-patte
 ```
 
 Feeds must have a channel title and at least one usable audio episode (an ID,
-title, publication date, and audio enclosure). The stored feed update date is
+title, timestamp, and audio enclosure). An episode uses its publication date
+when valid and falls back to its own update date (such as Atom `updated`).
+Entries without either valid date are skipped. The stored feed update date is
 at least as recent as the newest usable episode. It uses a newer metadata date
 if available, selecting the first valid timestamp in this order: channel update
 (`lastBuildDate`/Atom `updated`), channel publication (`pubDate`), HTTP
@@ -68,7 +70,9 @@ an audio extension. Enclosure URLs containing whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available. On first import they receive chronological indices
-(with GUID order breaking equal-date ties). Refresh retains every stored GUID and
+(with GUID order breaking equal-date ties). The library's
+`FeedParserRepository.parse_feed_entries()` uses the same order and indices for
+its preview. Refresh retains every stored GUID and
 its index, including entries absent from a rolling feed. New GUIDs receive indices
 after the retained maximum in date/GUID order, even for newly discovered older
 episodes. Listing follows stored index order; subscription counts describe the

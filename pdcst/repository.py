@@ -286,6 +286,18 @@ def parsed_date(value):
     return datetime(*value[:6], tzinfo=timezone.utc)
 
 
+def _episode_date(entry):
+    for field in ("published_parsed", "updated_parsed"):
+        # Check actual keys to avoid feedparser's deprecated updated alias.
+        if field not in entry.keys():
+            continue
+        try:
+            return parsed_date(entry[field])
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
+    raise ValueError("Missing usable episode timestamp")
+
+
 class FeedError(ValueError):
     """A feed cannot supply usable podcast metadata."""
 
@@ -2045,7 +2057,7 @@ class FeedParserRepository:
 
     @classmethod
     def parse_feed_entries(cls, entries):
-        """Return dictionaries for usable episodes in publication order."""
+        """Return usable episode dictionaries ordered by episode time and GUID."""
         return [
             episode.dict(exclude={"audio_file"})
             for episode in cls._parse_feed_entry_models(entries)
@@ -2068,7 +2080,7 @@ class FeedParserRepository:
                     guid=guid,
                     audio_url=audio_url,
                     audio_media_type=media_type,
-                    published=parsed_date(entry["published_parsed"]),
+                    published=_episode_date(entry),
                     title=title,
                 )
             except (KeyError, AttributeError, TypeError, ValueError, IndexError):
@@ -2085,7 +2097,7 @@ class FeedParserRepository:
             warnings.warn(
                 f"Skipped {skipped} unusable feed entry/entries", stacklevel=3
             )
-        episodes.sort(key=lambda episode: episode.published)
+        episodes.sort(key=lambda episode: (episode.published, episode.guid))
         for index, episode in enumerate(episodes, 1):
             episode.index = index
         return episodes
