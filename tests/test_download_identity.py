@@ -500,6 +500,42 @@ def test_backup_retirement_failure_is_success(store, monkeypatch, caller):
     assert target.read_bytes() == b"synthetic audio"
 
 
+def test_backup_retirement_failure_is_success_when_warnings_raise(store, monkeypatch):
+    from pdcst import repository
+
+    repo, episode, _, calls = store
+    target = repo.base_dir / "same.mp3"
+    episode.audio_file = target.name
+    repo.add(episode)
+    target.write_bytes(b"previous audio")
+    original_unlink = repository.os.unlink
+    injected = []
+
+    def fail_backup(path, *args, **kwargs):
+        path = Path(path)
+        if path.name.endswith(".previous"):
+            injected.append(repo.base_dir / path)
+            raise OSError("private cleanup failure")
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(repository.os, "unlink", fail_backup)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            assert (
+                repo.download_episode(
+                    episode, target.name, pdcst.download_with_progress
+                )
+                == target
+            )
+    assert len(calls) == 1
+    (backup,) = injected
+    assert backup.read_bytes() == b"previous audio"
+    assert target.read_bytes() == b"synthetic audio"
+    assert not (repo.base_dir / repository.AUDIO_INTENT).exists()
+    assert repo.all[episode.guid].audio_file == target.name
+
+
 @pytest.mark.parametrize("rollback_step", ["completed", "previous"])
 @pytest.mark.parametrize("primary", [TypeError, KeyboardInterrupt])
 def test_secondary_rollback_failure_preserves_primary_and_bytes(
