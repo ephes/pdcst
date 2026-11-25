@@ -68,7 +68,9 @@ an audio extension. Enclosure URLs containing whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available. On first import they receive chronological indices
-(with GUID order breaking equal-date ties). Refresh retains every stored GUID and
+(with GUID order breaking equal-date ties). The library's
+`FeedParserRepository.parse_feed_entries()` uses the same order and indices for
+its preview. Refresh retains every stored GUID and
 its index, including entries absent from a rolling feed. New GUIDs receive indices
 after the retained maximum in date/GUID order, even for newly discovered older
 episodes. Listing follows stored index order; subscription counts describe the

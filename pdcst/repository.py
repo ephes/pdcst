@@ -2045,7 +2045,7 @@ class FeedParserRepository:
 
     @classmethod
     def parse_feed_entries(cls, entries):
-        """Return dictionaries for usable episodes in publication order."""
+        """Return usable episode dictionaries ordered by publication time and GUID."""
         return [
             episode.dict(exclude={"audio_file"})
             for episode in cls._parse_feed_entry_models(entries)
@@ -2085,7 +2085,7 @@ class FeedParserRepository:
             warnings.warn(
                 f"Skipped {skipped} unusable feed entry/entries", stacklevel=3
             )
-        episodes.sort(key=lambda episode: episode.published)
+        episodes.sort(key=lambda episode: (episode.published, episode.guid))
         for index, episode in enumerate(episodes, 1):
             episode.index = index
         return episodes

@@ -1,5 +1,8 @@
 # Unreleased
 
+* Break equal-date ties by GUID in feed previews so their episode indices match
+  a first import.
+
 * Recheck the selected enclosure format before transferring or publishing a
   download, including when the enclosure URL stays the same.
 

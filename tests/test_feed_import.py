@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import feedparser
 import pytest
 
+import pdcst
 from pdcst.repository import (
     EpisodeRepository,
     FeedError,
@@ -206,6 +207,32 @@ def test_entry_date_conversion_without_channel_metadata():
     assert FeedParserRepository.parse_feed_entries(entries)[0]["published"] == DATE
 
 
+@pytest.mark.parametrize("guids", [("b", "a"), ("a", "b")])
+def test_preview_indexes_match_fresh_import_for_equal_dates(
+    monkeypatch, tmp_path, guids
+):
+    items = "".join(item(guid=guid) for guid in guids)
+    document = feedparser.parse(
+        f"<rss><channel><title>Podcast</title>{items}</channel></rss>"
+    )
+    monkeypatch.setattr(
+        FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
+    )
+    preview = FeedParserRepository.parse_feed_entries(document.entries)
+    podcast = pdcst.subscribe(
+        "https://example.com/feed",
+        "{index}.mp3",
+        None,
+        podcasts_repo=PodcastRepository(tmp_path),
+    )
+    stored = EpisodeRepository(tmp_path / podcast.directory).list()
+    assert [(episode.guid, episode.index) for episode in stored] == [("a", 1), ("b", 2)]
+    assert [(episode["guid"], episode["index"]) for episode in preview] == [
+        ("a", 1),
+        ("b", 2),
+    ]
+
+
 def test_entry_audio_selection_without_channel_metadata():
     entries = feedparser.parse(
         "<rss><channel>"
@@ -232,8 +259,6 @@ def test_invalid_episode_date_warns(monkeypatch):
 
 
 def test_subscribe_without_channel_date(monkeypatch, tmp_path):
-    import pdcst
-
     document = feedparser.parse(
         f"<rss><channel><title>Podcast</title>{item()}</channel></rss>"
     )
