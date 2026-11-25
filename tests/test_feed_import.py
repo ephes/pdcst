@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 import feedparser
 import pytest
 
-from pdcst.repository import EpisodeRepository, FeedParserRepository, PodcastRepository
+from pdcst.repository import (
+    EpisodeRepository,
+    FeedError,
+    FeedParserRepository,
+    PodcastRepository,
+)
 
 DATE = datetime(2022, 7, 1, 12, tzinfo=timezone.utc)
 
@@ -144,6 +149,36 @@ def test_invalid_entries_warn_and_preserve_siblings(monkeypatch, enclosures):
     assert podcast.episodes_count == 1
     assert episodes[0].guid == "valid"
     assert episodes[0].index == 1
+
+
+@pytest.mark.parametrize("include_valid_sibling", [True, False])
+def test_model_rejection_isolated_before_duplicate_check(
+    monkeypatch, include_valid_sibling
+):
+    # Simulate a candidate that passes enclosure selection but fails EpisodeInDb.
+    media_type = "audio/x-synthetic"
+    monkeypatch.setattr(
+        FeedParserRepository,
+        "AUDIO_TYPES",
+        FeedParserRepository.AUDIO_TYPES | {media_type},
+    )
+    entries = item(
+        f'<enclosure url="https://example.test/invalid" type="{media_type}"/>'
+    )
+    if include_valid_sibling:
+        with pytest.warns(
+            UserWarning, match="^Skipped 1 unusable feed entry/entries$"
+        ) as warnings:
+            podcast, episodes = fetch(monkeypatch, entries + item())
+        assert len(warnings) == 1
+        assert podcast.episodes_count == 1
+        assert [
+            (episode.guid, episode.index, episode.audio_media_type)
+            for episode in episodes
+        ] == [("one", 1, "audio/mpeg")]
+    else:
+        with pytest.raises(FeedError, match="Feed has no usable audio episodes"):
+            fetch(monkeypatch, entries)
 
 
 def test_declared_audio_precedes_untyped_fallback(monkeypatch):

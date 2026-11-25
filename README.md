@@ -65,7 +65,8 @@ an enclosure without a media type may be used when its URL path ends in .mp3,
 .m4a, .aac, .ogg, .oga, .opus, .wav, or .flac (case insensitive; query strings
 are ignored). Explicit types outside the supported list are rejected, even with
 an audio extension. Enclosure URLs containing whitespace are rejected.
-Unusable entries are skipped with a warning reporting their count; valid sibling
+Entries that fail episode model validation are skipped along with other unusable
+entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available. On first import they receive chronological indices
 (with GUID order breaking equal-date ties). Refresh retains every stored GUID and
 its index, including entries absent from a rolling feed. New GUIDs receive indices

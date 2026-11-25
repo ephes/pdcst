@@ -1,5 +1,8 @@
 # Unreleased
 
+* Skip feed entries that fail episode model validation and count each rejection
+  in the usual warning. Check for duplicate GUIDs among admitted episodes.
+
 * Refuse locale-dependent index type `n` in filename patterns and report how
   to migrate to decimal formatting with optional explicit grouping.
 
