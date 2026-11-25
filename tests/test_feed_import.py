@@ -51,6 +51,15 @@ def test_channel_updated_preferred(monkeypatch):
     assert podcast.feed.updated == datetime(2022, 7, 2, 12, tzinfo=timezone.utc)
 
 
+def test_channel_updated_cannot_predate_newest_admitted_episode(monkeypatch):
+    podcast, episodes = fetch(
+        monkeypatch,
+        item() + item(date="Sat, 02 Jul 2022 12:00:00 GMT", guid="newest"),
+        "<lastBuildDate>Thu, 30 Jun 2022 12:00:00 GMT</lastBuildDate>",
+    )
+    assert podcast.feed.updated == episodes[-1].published
+
+
 @pytest.mark.parametrize("entries", ["", "<item><title>Broken</title></item>"])
 def test_unusable_feed_has_clear_error(monkeypatch, entries):
     with pytest.raises(ValueError, match="Feed has no usable audio episodes"):
@@ -260,19 +269,24 @@ def test_channel_publication_date_without_deprecated_alias(monkeypatch, channel_
 
 
 @pytest.mark.parametrize(
-    "channel_date, expected_day",
+    "channel_date, modified, expected_day",
     [
-        ("", 3),
-        ("<lastBuildDate>unknown</lastBuildDate>", 3),
-        ("<lastBuildDate>Sat, 02 Jul 2022 12:00:00 GMT</lastBuildDate>", 2),
+        ("", "2022-06-30", 1),
+        ("", "2022-07-03", 3),
+        ("<lastBuildDate>unknown</lastBuildDate>", "2022-07-03", 3),
+        (
+            "<lastBuildDate>Sat, 02 Jul 2022 12:00:00 GMT</lastBuildDate>",
+            "2022-07-03",
+            2,
+        ),
     ],
 )
-def test_http_last_modified_fallback(monkeypatch, channel_date, expected_day):
+def test_http_last_modified_fallback(monkeypatch, channel_date, modified, expected_day):
     document = feedparser.parse(
         f"<rss><channel><title>Podcast</title>{channel_date}{item()}</channel></rss>"
     )
     document["updated_parsed"] = time.strptime(
-        "2022-07-03 12:00:00", "%Y-%m-%d %H:%M:%S"
+        f"{modified} 12:00:00", "%Y-%m-%d %H:%M:%S"
     )
     monkeypatch.setattr(
         FeedParserRepository, "fetch_document", staticmethod(lambda url: document)

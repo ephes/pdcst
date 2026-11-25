@@ -1,5 +1,8 @@
 # Unreleased
 
+* Keep the feed update date at least as recent as the newest admitted episode
+  while preserving channel and HTTP timestamp precedence.
+
 * Skip feed entries that fail episode model validation and count each rejection
   in the usual warning. Check for duplicate GUIDs among admitted episodes.
 

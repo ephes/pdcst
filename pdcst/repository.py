@@ -2014,7 +2014,7 @@ class FeedParserRepository:
         return episodes
 
     def get(self, url, directory, episode_name_pattern):
-        """Fetch a feed; channel update defaults to the newest usable episode."""
+        """Fetch a feed and bound its update date by the newest usable episode."""
         document = self.fetch_document(url)
         title = document.get("feed", {}).get("title")
         if not isinstance(title, str) or not title.strip():
@@ -2031,7 +2031,7 @@ class FeedParserRepository:
         ):
             if date:
                 try:
-                    updated = parsed_date(date)
+                    updated = max(updated, parsed_date(date))
                 except (TypeError, ValueError, IndexError):
                     continue
                 break

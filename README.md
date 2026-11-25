@@ -51,11 +51,11 @@ $ pdcst add https://python-podcast.de/show/feed/podcast/mp3/rss.xml --name-patte
 ```
 
 Feeds must have a channel title and at least one usable audio episode (an ID,
-title, publication date, and audio enclosure). The stored feed update date uses
-the first valid value from channel update date (`lastBuildDate`/Atom `updated`),
-channel publication date (`pubDate`), HTTP `Last-Modified`, then the newest usable
-episode publication date. Previously only HTTP `Last-Modified` was used; it is
-now preserved as a fallback rather than required. Empty or unusable feeds raise
+title, publication date, and audio enclosure). The stored feed update date is
+at least as recent as the newest usable episode. It uses a newer metadata date
+if available, selecting the first valid timestamp in this order: channel update
+(`lastBuildDate`/Atom `updated`), channel publication (`pubDate`), HTTP
+`Last-Modified`. Empty or unusable feeds raise
 `pdcst.repository.FeedError` (a `ValueError`) with a short diagnostic message.
 
 Import chooses the first valid HTTP(S) enclosure whose declared media type is
