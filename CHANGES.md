@@ -1,5 +1,8 @@
 # Unreleased
 
+* Show episode GUIDs with `episodes --show-guid` and select a download by exact
+  feed GUID with `download --guid`, including episodes with identical titles.
+
 * Accept an episode's update timestamp when it has no usable publication
   timestamp, including Atom entries with only `updated`.
 

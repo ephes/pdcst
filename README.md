@@ -194,6 +194,8 @@ title, including when the store is empty, also exits with status 2 and reports
 `No matching podcast`. A matching subscription with no episodes succeeds with
 no output. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
+`pdcst episodes amber --show-guid` appends each episode's feed GUID after a tab.
+GUIDs use the same terminal escaping as titles.
 If the selected episode directory cannot be resolved safely, `episodes` exits
 with status 2 and a directory diagnostic. Check the subscription directory and
 its symlink targets under `PDCST_HOME`.
@@ -261,12 +263,18 @@ or metadata. A mislabeled CDN must use one of the supported types; a filename
 extension does not override its response declaration. This checks the declared
 type, without decoding or sniffing the media bytes.
 
-Downloads require a unique match for both titles; a unique exact title takes
+Title-based selection requires a unique match; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact
-title or a more specific substring; duplicate exact titles must first be corrected
-in the metadata. Download selection counts matches and checks for exact titles
-in one pass. Browsing stops matching at the first substring match.
+title or a more specific substring. For episodes with identical titles, get the
+GUID from `pdcst episodes python --show-guid` and select it explicitly:
+
+```shell
+$ pdcst download python --guid 'episode-guid'
+```
+
+`--guid` requires the complete, case-sensitive GUID from the selected feed.
+Supply either the episode title argument or `--guid`.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
 For subscriptions with a saved directory, `download` holds the same directory
