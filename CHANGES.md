@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse multiply linked store locks both before waiting and after acquiring
+  the lock.
+
 * Preserve successful downloads and completed lock operations when reporting
   cleanup warnings raises an exception.
 

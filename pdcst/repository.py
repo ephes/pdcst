@@ -190,7 +190,7 @@ def _warn_completed_operation(message):
 
 @contextmanager
 def advisory_lock(path, *, directory_fd=None):
-    """Admit a stable regular inode and wait for it under a monotonic budget."""
+    """Admit a stable single-link inode under a monotonic wait budget."""
     descriptor = None
     deadline = time.monotonic() + settings.lock_wait_seconds
 
@@ -211,8 +211,8 @@ def advisory_lock(path, *, directory_fd=None):
                 **({"dir_fd": directory_fd} if directory_fd is not None else {}),
             )
             info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode):
-                raise OSError("not a regular lock file")
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError("not a single-link regular lock file")
             while True:
                 remaining = remaining_wait()
                 try:
@@ -225,15 +225,16 @@ def advisory_lock(path, *, directory_fd=None):
                 dir_fd=directory_fd,
                 follow_symlinks=False,
             )
-            if not stat.S_ISREG(named.st_mode) or (info.st_dev, info.st_ino) != (
-                named.st_dev,
-                named.st_ino,
+            if (
+                not stat.S_ISREG(named.st_mode)
+                or named.st_nlink != 1
+                or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)
             ):
                 raise OSError("lock identity changed")
             remaining_wait()
         except OSError:
             raise StoreWriteError(
-                f"Cannot acquire lock {path}: regular stable file required"
+                f"Cannot acquire lock {path}: regular stable file required with exactly one hard link"
             ) from None
         yield
     except BaseException:
