@@ -58,6 +58,27 @@ def test_ordinary_dotted_basename_is_portable(podcast, episode):
     assert podcast.get_audio_file_name(episode) == "com10.refactoring.archive.mp3"
 
 
+@pytest.mark.parametrize("locale_separator", [",", "."])
+def test_locale_sensitive_index_has_migration_error(
+    podcast, episode, monkeypatch, locale_separator
+):
+    def simulated_format(value, spec):
+        if spec.endswith("n"):
+            return format(value, ",d").replace(",", locale_separator)
+        return format(value, spec)
+
+    monkeypatch.setattr("pdcst.models.format", simulated_format, raising=False)
+    episode.index = 12345
+    podcast.file_name_pattern = "{index:04n}.mp3"
+    with pytest.raises(FilenamePatternError, match="replace.*n.*with.*d"):
+        podcast.get_audio_file_name(episode)
+    with pytest.raises(FilenamePatternError, match="replace.*n.*with.*d"):
+        podcast.validate_audio_filename_pattern()
+
+    podcast.file_name_pattern = "{index:,d}_{index:_d}.mp3"
+    assert podcast.get_audio_file_name(episode) == "12,345_12_345.mp3"
+
+
 def test_filename_resolves_only_referenced_fields_once(podcast, episode, monkeypatch):
     calls = []
     sanitize = podcast.title_for_filename

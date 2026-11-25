@@ -359,7 +359,8 @@ Ordinary custom and hidden directories such as `.shows` remain supported.
 Legacy stored reserved directories must be corrected before refresh.
 Filename patterns must produce a single relative filename that is valid on
 Windows. Device names such as `CON.mp3`, forbidden Windows filename characters
-and trailing dots or spaces are refused when the name is rendered. Supported placeholders are
+and trailing dots or spaces are refused when the name is rendered. Supported
+placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
@@ -373,10 +374,12 @@ downloaded filenames remain associated without renaming. Both `add` and
 `download` report pattern failures as concise CLI errors. Formatting accepts the
 standard spec syntax with bounded numbers (every width/precision 0–255): an
 optional fill and alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,
-grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`, `n` (not `c`);
+grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`;
 string fields accept width (not starting with `0`) and/or `.precision`,
 optionally followed by `s`. For example, `{index:03d}_{title:.100}.{file_format}`
 limits the title to 100 characters and `{index:>3}` right-aligns the index.
+Replace the locale-dependent index type `n` in stored patterns with `d`, or use
+`,d` or `_d` for explicit grouping.
 Only referenced fields are prepared, so `{index:03}.mp3` needs neither title
 sanitization nor extension lookup. Repeated fields reuse their prepared values.
 Other format syntax is refused before formatting. Patterns are limited to 4,096

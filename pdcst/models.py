@@ -20,7 +20,8 @@ FILENAME_PATTERN_ERROR = (
 # Standard format-spec syntax with bounded numbers (each at most 255, checked
 # separately): optional fill+alignment, then for the integer index sign,
 # "#", zero padding, width, grouping and an integer type (no "c", which could
-# emit arbitrary characters); for text fields width, precision and "s". Text
+# emit arbitrary characters); "n" is recognized for a migration diagnostic.
+# Text fields allow width, precision and "s". Text
 # widths cannot start with 0 (that would zero-fill strings on the right).
 _ALIGN = r"(?:[^{}]?[<>=^])?"
 INDEX_SPEC = _ALIGN + r"[+\- ]?#?0?[0-9]{0,3}[,_]?[bdoxXn]?"
@@ -157,9 +158,14 @@ class Podcast:
                     )
                 ):
                     raise ValueError
-            return parts
         except ValueError:
             raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
+        if any(field == "index" and spec.endswith("n") for _, field, spec, _ in parts):
+            raise FilenamePatternError(
+                "Invalid filename pattern: replace locale-dependent index type 'n' with 'd' "
+                "(use ',d' or '_d' for grouping)"
+            )
+        return parts
 
     def validate_audio_filename_pattern(self):
         """Admit filename format syntax without loading an episode."""

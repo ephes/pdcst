@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse locale-dependent index type `n` in filename patterns and report how
+  to migrate to decimal formatting with optional explicit grouping.
+
 * Refuse Windows-incompatible rendered audio filenames before publication or
   transfer.
 
