@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timezone
 
 import feedparser
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -192,6 +193,79 @@ def test_untyped_audio_fallback(monkeypatch):
         monkeypatch, item('<enclosure url="https://example.com/a.mp3?download=1"/>')
     )
     assert episodes[0].audio_url == "https://example.com/a.mp3?download=1"
+
+
+@pytest.mark.parametrize(
+    "media_type", ["application/octet-stream", "binary/octet-stream"]
+)
+def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_type):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    feed_url = "https://example.com/feed"
+    audio_url = "https://example.com/A.MP3?download=1"
+    generic = f'<enclosure url="{audio_url}" type="{media_type}"/>'
+    typed_url = "https://example.com/preferred"
+    generic_guid = "https://example.com/generic"
+    entries = (
+        item(generic, guid=generic_guid)
+        + item(
+            generic + f'<enclosure url="{typed_url}" type="audio/ogg"/>',
+            guid="preferred",
+        )
+        + item(
+            f'<enclosure url="https://example.com/file.bin?name=a.mp3" type="{media_type}"/>',
+            guid="non-audio",
+        )
+        + item(
+            '<enclosure url="https://example.com/image.mp3" type="image/jpeg"/>',
+            guid="image",
+        )
+        + item(
+            '<enclosure url="https://example.com/video.mp3" type="video/mp4"/>',
+            guid="video",
+        )
+    )
+
+    def respond(request):
+        if str(request.url) == feed_url:
+            body = f"<rss><channel><title>Podcast</title>{entries}</channel></rss>"
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/rss+xml"},
+                stream=httpx.ByteStream(body.encode()),
+            )
+        assert str(request.url) == audio_url
+        return httpx.Response(
+            200,
+            headers={"Content-Type": media_type},
+            stream=httpx.ByteStream(b"synthetic audio"),
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
+    )
+
+    with pytest.warns(UserWarning, match="Skipped 3 unusable feed entry"):
+        podcast = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
+    directory = tmp_path / podcast.directory
+    repository = EpisodeRepository(directory)
+    fallback, preferred = repository.list()
+    assert (fallback.guid, fallback.audio_url, fallback.audio_media_type) == (
+        generic_guid,
+        audio_url,
+        None,
+    )
+    assert (preferred.guid, preferred.audio_url, preferred.audio_media_type) == (
+        typed_url,
+        typed_url,
+        "audio/ogg",
+    )
+
+    pdcst.download("Podcast", guid=generic_guid)
+    assert repository.list()[0].audio_file == "1.mp3"
+    assert (directory / "1.mp3").read_bytes() == b"synthetic audio"
 
 
 @pytest.mark.parametrize(
