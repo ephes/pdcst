@@ -1636,8 +1636,7 @@ class PodcastRepository(JsonRepository):
                     try:
                         directory.lstat()
                     except FileNotFoundError:
-                        episodes = []
-                        check_directory = admitted._check_directory
+                        selected = None
                     else:
                         selected = stack.enter_context(
                             EpisodeRepository(directory).admitted(
@@ -1647,11 +1646,20 @@ class PodcastRepository(JsonRepository):
                         episodes = selected.list(
                             additional_attributes={"podcast": podcast}
                         )
-                        check_directory = selected._check_directory
 
                     # A catalog writer may have committed while the read was open.
                     admitted._browse_directory(podcast, expected=directory)
-                    check_directory()
+                    if selected is None:
+                        admitted._check_directory()
+                        try:
+                            directory.lstat()
+                        except FileNotFoundError:
+                            return []
+                        raise StoreReadError(
+                            Path(EpisodeRepository.name),
+                            "Podcast subscription directory changed; retry browsing",
+                        )
+                    selected._check_directory()
                     return episodes
         except (OSError, StoreWriteError):
             raise StoreReadError(

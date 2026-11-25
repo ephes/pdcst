@@ -1,5 +1,8 @@
 # Unreleased
 
+* Recheck missing episode directories before returning an empty listing and
+  report a retry if the directory appeared during browsing.
+
 * Keep the feed update date at least as recent as the newest admitted episode
   while preserving channel and HTTP timestamp precedence.
 

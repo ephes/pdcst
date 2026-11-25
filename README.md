@@ -194,8 +194,10 @@ Every browse reloads current JSON without writing it, including repeated API cal
 using the same repository instance. Cooperating writers are visible on the next
 read. Default API repositories are created per call using the current settings.
 Episode browsing checks that the selected feed still owns the directory before
-and after reading its episodes. If the directory changes during selection or
-reading, rerun `pdcst episodes` to make a fresh selection. API callers can
+and after reading its episodes. If the directory was absent, browsing confirms
+its absence again after rechecking ownership before returning an empty listing.
+If the directory changes or appears during selection or reading, rerun
+`pdcst episodes` to make a fresh selection. API callers can
 reselect the subscription before retrying `list_all_episodes(podcast)`.
 For a legacy subscription without a saved directory, browsing prefers the
 contained legacy directory if it exists and otherwise uses the sanitized name.
