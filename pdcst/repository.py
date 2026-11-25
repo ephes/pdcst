@@ -43,7 +43,14 @@ from pydantic import (
 
 from .config import settings
 from .download import DownloadError
-from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
+from .models import (
+    AUDIO_MIME_EXTENSIONS,
+    AUDIO_SUFFIXES,
+    Episode,
+    Podcast,
+    audio_format_changed,
+    effective_audio_format,
+)
 from .storage import (
     DirectoryAdmissionError,
     DirectoryIdentityChanged,
@@ -846,7 +853,9 @@ class EpisodeRepository(JsonRepository):
                 raise DownloadConflict("Audio destination must be a regular file")
         return info
 
-    def _download_record(self, locked, guid, audio_url, name, scan_budget=None):
+    def _download_record(
+        self, locked, guid, audio_url, selected_format, name, scan_budget=None
+    ):
         """Validate identity and exclusive ownership while holding the JSON lock."""
         reserved = {self.name, self.name + ".lock", self.name + ".download.lock"}
         if name.casefold() in reserved or name.casefold().startswith(
@@ -866,7 +875,14 @@ class EpisodeRepository(JsonRepository):
         target = self.base_dir / name
         target_info = self._audio_destination_info(target)
         current = locked.get(guid)
-        if current is None or current.audio_url != audio_url:
+        if (
+            current is None
+            or current.audio_url != audio_url
+            or audio_format_changed(
+                selected_format,
+                effective_audio_format(current.audio_url, current.audio_media_type),
+            )
+        ):
             raise DownloadConflict(
                 "Episode missing or enclosure changed; retry download"
             )
@@ -980,6 +996,10 @@ class EpisodeRepository(JsonRepository):
     def _download_in_directory(self, episode, name, transfer, check_directory):
         """Claim audio, transfer outside the JSON lock, then commit only its link."""
         check = check_directory
+        guid, audio_url = episode.guid, episode.audio_url
+        selected_format = effective_audio_format(
+            audio_url, getattr(episode, "audio_media_type", None)
+        )
 
         def check_directory():
             try:
@@ -1000,8 +1020,9 @@ class EpisodeRepository(JsonRepository):
             with self._lock():
                 self._download_record(
                     self._fetch_all(),
-                    episode.guid,
-                    episode.audio_url,
+                    guid,
+                    audio_url,
+                    selected_format,
                     name,
                     scan_budget,
                 )
@@ -1020,7 +1041,7 @@ class EpisodeRepository(JsonRepository):
             stage_descriptor = None
             try:
                 try:
-                    transfer(episode.audio_url, stage, directory_fd=self._directory_fd)
+                    transfer(audio_url, stage, directory_fd=self._directory_fd)
                 except PublicationDurabilityError:
                     raise DownloadError(
                         "Unable to stage audio download: directory sync failed"
@@ -1041,7 +1062,7 @@ class EpisodeRepository(JsonRepository):
                 with self._lock():
                     locked = self._fetch_all()
                     current, target, target_info = self._download_record(
-                        locked, episode.guid, episode.audio_url, name, scan_budget
+                        locked, guid, audio_url, selected_format, name, scan_budget
                     )
                     check_directory()
                     if self._audio_generation(
@@ -1301,7 +1322,17 @@ class EpisodeRepository(JsonRepository):
                 model.index = next_index
                 next_index += 1
             model.audio_file = None
-            if previous and previous.audio_url == model.audio_url:
+            if (
+                previous
+                and previous.audio_file
+                and previous.audio_url == model.audio_url
+                and not audio_format_changed(
+                    effective_audio_format(
+                        previous.audio_url, previous.audio_media_type
+                    ),
+                    effective_audio_format(model.audio_url, model.audio_media_type),
+                )
+            ):
                 model.audio_file = previous.audio_file
             locked[model.pk] = model
         return dict(sorted(locked.items(), key=lambda item: (item[1].index, item[0])))

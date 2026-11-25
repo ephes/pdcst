@@ -44,6 +44,24 @@ AUDIO_MIME_EXTENSIONS = {
 AUDIO_SUFFIXES = frozenset(AUDIO_MIME_EXTENSIONS.values()) | {"oga"}
 
 
+def effective_audio_format(audio_url: str, media_type: str | None) -> str | None:
+    """Return format evidence, excluding legacy guesses used only for filenames."""
+    try:
+        path = urlsplit(audio_url).path
+    except ValueError:
+        # Legacy stores admit nonempty URL strings even if they cannot be parsed.
+        path = ""
+    _, separator, suffix = path.rsplit("/", 1)[-1].rpartition(".")
+    if separator and suffix.lower() in AUDIO_SUFFIXES:
+        return suffix.lower()
+    return AUDIO_MIME_EXTENSIONS.get(media_type)
+
+
+def audio_format_changed(previous: str | None, current: str | None) -> bool:
+    """Require two known formats to confirm a change."""
+    return previous is not None and current is not None and previous != current
+
+
 class FilenamePatternError(ValueError):
     """A pattern cannot produce a supported single filename."""
 
@@ -178,16 +196,12 @@ class Podcast:
             raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
 
     def _audio_file_format(self, episode):
-        path = urlsplit(episode.audio_url).path
-        _, separator, suffix = path.rsplit("/", 1)[-1].rpartition(".")
-        suffix = suffix.lower() if separator else ""
-        file_format = (
-            suffix
-            if suffix in AUDIO_SUFFIXES
-            else AUDIO_MIME_EXTENSIONS.get(episode.audio_media_type)
+        file_format = effective_audio_format(
+            episode.audio_url, episode.audio_media_type
         )
         if file_format is None:
             # Preserve legacy records' filename behavior when no type was stored.
+            path = urlsplit(episode.audio_url).path
             file_format = self.title_for_filename(path.rsplit(".", 1)[-1])
         return file_format
 

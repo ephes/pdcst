@@ -59,3 +59,64 @@ def test_legacy_record_without_media_type(tmp_path, episode):
     assert reloaded.audio_file_name.endswith(".mp3")
     repo.add(reloaded)
     assert repo.list()[0].guid == episode.guid
+
+
+@pytest.mark.parametrize(
+    "path,previous_type,new_type,old_suffix,new_suffix",
+    [
+        ("download", "audio/mpeg", "audio/mp4", "mp3", "m4a"),
+        ("download", "audio/mpeg", "audio/mp3", "mp3", "mp3"),
+        ("file.MP3?token=x", "audio/mpeg", "audio/mp4", "mp3", "mp3"),
+        ("download", None, "audio/mp4", "_download", "m4a"),
+    ],
+)
+def test_refresh_retains_audio_unless_effective_format_changes(
+    tmp_path, monkeypatch, path, previous_type, new_type, old_suffix, new_suffix
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    url = f"https://example.test/{path}"
+    old_type = previous_type or "audio/mpeg"
+    feed_url = "https://example.test/feed"
+
+    def fetch(*_):
+        return feedparser.parse(
+            "<rss><channel><title>Synthetic</title>"
+            + item(f'<enclosure url="{url}" type="{old_type}"/>')
+            + "</channel></rss>"
+        )
+
+    def transfer(enclosure, stage, **kwargs):
+        assert enclosure == url
+        stage.write_bytes(payload)
+
+    monkeypatch.setattr(FeedParserRepository, "fetch_document", fetch)
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    show = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
+    repo = EpisodeRepository(tmp_path / show.directory)
+    if previous_type is None:
+        # A historical store had no MIME type for its extensionless URL.
+        legacy = repo.list()[0]
+        legacy.audio_media_type = None
+        repo.add(legacy)
+    payload = b"original audio"
+    pdcst.download("synthetic", "episode")
+    old_name = f"1.{old_suffix}"
+    old_audio = repo.base_dir / old_name
+    assert repo.list()[0].audio_file == old_name
+
+    old_type = new_type
+    pdcst.subscribe(feed_url, "{index}.{file_format}", None)
+
+    current = repo.list({"podcast": show})[0]
+    assert current.audio_media_type == new_type
+    assert old_audio.read_bytes() == b"original audio"
+    assert current.audio_file_name == f"1.{new_suffix}"
+    if previous_type is not None and old_suffix != new_suffix:
+        assert current.audio_file is None
+        payload = b"new audio"
+        pdcst.download("synthetic", "episode")
+        assert repo.list()[0].audio_file == current.audio_file_name
+        assert (repo.base_dir / current.audio_file_name).read_bytes() == b"new audio"
+        assert old_audio.read_bytes() == b"original audio"
+    else:
+        assert current.audio_file == old_name
