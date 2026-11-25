@@ -180,6 +180,14 @@ def clear_intent(path, *, directory_fd=None):
         sync_directory(path.parent, directory_fd=directory_fd)
 
 
+def _warn_completed_operation(message):
+    try:
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
+    except Exception:
+        # Warning filters and custom handlers can raise after publication.
+        pass
+
+
 @contextmanager
 def advisory_lock(path, *, directory_fd=None):
     """Admit a stable regular inode and wait for it under a monotonic budget."""
@@ -239,10 +247,8 @@ def advisory_lock(path, *, directory_fd=None):
         try:
             os.close(descriptor)
         except OSError:
-            warnings.warn(
-                f"Operation completed; lock release uncertain for {path}",
-                RuntimeWarning,
-                stacklevel=2,
+            _warn_completed_operation(
+                f"Operation completed; lock release uncertain for {path}"
             )
 
 
@@ -1141,13 +1147,11 @@ class EpisodeRepository(JsonRepository):
                                 if backup is not None
                                 else ""
                             )
-                            warnings.warn(
+                            _warn_completed_operation(
                                 "Download completed; recovery cleanup pending at "
                                 f"{intent}; {retained}"
                                 "stop all pdcst commands and follow README "
-                                "interrupted-publication recovery; do not repeat transfer",
-                                RuntimeWarning,
-                                stacklevel=2,
+                                "interrupted-publication recovery; do not repeat transfer"
                             )
                             return target
                         if backup is not None:
@@ -1155,12 +1159,10 @@ class EpisodeRepository(JsonRepository):
                                 self._unlink(backup)
                                 self._sync()
                             except OSError:
-                                warnings.warn(
+                                _warn_completed_operation(
                                     "Download completed; cleanup could not remove or "
                                     "durably retire previous audio backup at "
-                                    f"{backup}; inspect before removing manually",
-                                    RuntimeWarning,
-                                    stacklevel=2,
+                                    f"{backup}; inspect before removing manually"
                                 )
                         return target
             except BaseException as error:

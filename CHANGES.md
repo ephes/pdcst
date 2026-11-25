@@ -1,5 +1,8 @@
 # Unreleased
 
+* Preserve successful downloads and completed lock operations when reporting
+  cleanup warnings raises an exception.
+
 * Continue audio downloads without progress updates when the display fails.
   Completed transfers can still publish, and incomplete transfers are refused.
 

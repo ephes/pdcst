@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -225,7 +226,9 @@ def test_interrupted_lock_wait_closes_descriptor(tmp_path, monkeypatch):
     assert closed == descriptors
 
 
-@pytest.mark.parametrize("outcome", ["refused", "failed", "completed"])
+@pytest.mark.parametrize(
+    "outcome", ["refused", "failed", "completed", "warnings-as-errors"]
+)
 def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, outcome):
     import pdcst.repository as module
 
@@ -244,7 +247,7 @@ def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, out
         with module.advisory_lock(lock):
             if outcome == "failed":
                 raise failure
-            assert outcome == "completed"
+            assert outcome in {"completed", "warnings-as-errors"}
             catalog.write_bytes(b"[]")
 
     monkeypatch.setattr(module.os, "close", failing_close)
@@ -262,6 +265,11 @@ def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, out
         with pytest.raises(ValueError) as raised:
             publish()
         assert raised.value is failure
+    elif outcome == "warnings-as-errors":
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            publish()
+        assert catalog.read_bytes() == b"[]"
     else:
         with pytest.warns(RuntimeWarning, match="lock release uncertain"):
             publish()

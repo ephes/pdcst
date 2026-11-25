@@ -618,7 +618,9 @@ succeeds, and `download_episode` returns the completed destination path. The war
 `.pdcst-download-*.previous` path (it may already be absent if only retirement
 sync failed) without filesystem exception details. That
 backup may be removed manually after checking the new audio and metadata; no
-repeat transfer is needed.
+repeat transfer is needed. Both download cleanup warnings are best effort.
+If a warning filter or handler raises while reporting them, the download
+still returns its completed path.
 
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
 serialize cooperating writers across reload and atomic replacement. Metadata,
@@ -640,7 +642,8 @@ remain held for their operation. The limit covers acquisition and the lock
 identity check before the operation starts.
 A lock descriptor close is attempted once. If it fails during another error,
 the original error is reported. After a completed operation, a runtime warning
-reports uncertain lock release. The close warning alone requires no repeat write.
+reports uncertain lock release when warning reporting is available. The
+operation still succeeds if a warning filter or handler raises.
 Do not remove any lock file while commands are running. Failed serialization
 or writes before replacement leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. If the staging descriptor fails
