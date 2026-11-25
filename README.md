@@ -357,7 +357,9 @@ fetching the feed. When a library caller supplies a `PodcastRepository` to
 validation, directory ownership and the location of both metadata stores.
 Ordinary custom and hidden directories such as `.shows` remain supported.
 Legacy stored reserved directories must be corrected before refresh.
-Filename patterns must produce a single relative filename. Supported placeholders are
+Filename patterns must produce a single relative filename that is valid on
+Windows. Device names such as `CON.mp3`, forbidden Windows filename characters
+and trailing dots or spaces are refused when the name is rendered. Supported placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)

@@ -4,12 +4,15 @@ All the domain models for pdcst live here.
 
 import re
 from functools import partial
-from pathlib import PureWindowsPath
 from string import Formatter
 from urllib.parse import urlsplit
 
 FILENAME_MAX_BYTES = 255
 FILENAME_PATTERN_MAX_CHARS = 4096
+WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{prefix}{digit}" for prefix in ("COM", "LPT") for digit in "123456789¹²³"
+}
+WINDOWS_FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
 FILENAME_PATTERN_ERROR = (
     "Invalid filename pattern: use index, title and file_format; "
     "decimal width/precision and filename bytes must be at most 255"
@@ -221,14 +224,12 @@ class Podcast:
             raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
         if (
             not name
-            or name in {".", ".."}
-            or "/" in name
-            or "\\" in name
-            or "\x00" in name
-            or PureWindowsPath(name).drive
+            or name.endswith((".", " "))
+            or WINDOWS_FORBIDDEN_CHARS.search(name)
+            or name.partition(".")[0].rstrip(" ").upper() in WINDOWS_DEVICE_NAMES
         ):
             raise FilenamePatternError(
-                "Invalid filename pattern: episode name must be a single relative file name"
+                "Invalid filename pattern: episode name must be a Windows-compatible basename"
             )
         return name
 

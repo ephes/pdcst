@@ -32,6 +32,32 @@ def test_padded_index_and_escaped_braces(podcast, episode):
     assert podcast.get_audio_file_name(episode) == "{show}_001_refactoring.mp3"
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "{title:.3}.mp3",
+        "nUl .mp3",
+        "LPT².archive.mp3",
+        "CONIN$.mp3",
+        "episode.mp3.",
+        "episode.mp3 ",
+        "episode.mp3:stream",
+        "episode\t.mp3",
+    ],
+)
+def test_windows_incompatible_basename_is_refused(podcast, episode, pattern):
+    # Precision can turn a title into a device name after formatting.
+    episode.title = "CONcert"
+    podcast.file_name_pattern = pattern
+    with pytest.raises(FilenamePatternError, match="Invalid filename pattern"):
+        podcast.get_audio_file_name(episode)
+
+
+def test_ordinary_dotted_basename_is_portable(podcast, episode):
+    podcast.file_name_pattern = "com10.{title}.archive.mp3"
+    assert podcast.get_audio_file_name(episode) == "com10.refactoring.archive.mp3"
+
+
 def test_filename_resolves_only_referenced_fields_once(podcast, episode, monkeypatch):
     calls = []
     sanitize = podcast.title_for_filename
@@ -85,7 +111,8 @@ def test_expansion_rejected_before_formatting(podcast, episode, pattern, monkeyp
 
 
 @pytest.mark.parametrize(
-    "pattern,size", [("{index:0255d}", 255), ("{title:255}", 255), ("{title:.255}", 11)]
+    "pattern,size",
+    [("{index:0255d}", 255), ("{title:_<255}", 255), ("{title:.255}", 11)],
 )
 def test_format_limit_boundary(podcast, episode, pattern, size):
     podcast.file_name_pattern = pattern

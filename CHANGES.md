@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse Windows-incompatible rendered audio filenames before publication or
+  transfer.
+
 * Recheck subscription directory ownership during episode browsing and report a
   retry when the selected directory changes. Browsing still works on read-only
   stores.
