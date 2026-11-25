@@ -1,5 +1,8 @@
 # Unreleased
 
+* Clear download associations when a feed refresh changes the known enclosure
+  format at the same URL. Keep the old audio on disk.
+
 * Keep the episode directory open from selection through download for pinned
   subscriptions. Refuse the transfer if that directory was moved or replaced.
 

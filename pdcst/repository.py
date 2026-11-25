@@ -43,7 +43,14 @@ from pydantic import (
 
 from .config import settings
 from .download import DownloadError
-from .models import AUDIO_MIME_EXTENSIONS, AUDIO_SUFFIXES, Episode, Podcast
+from .models import (
+    AUDIO_MIME_EXTENSIONS,
+    AUDIO_SUFFIXES,
+    Episode,
+    Podcast,
+    audio_format_changed,
+    effective_audio_format,
+)
 from .storage import (
     DirectoryAdmissionError,
     DirectoryIdentityChanged,
@@ -1301,7 +1308,17 @@ class EpisodeRepository(JsonRepository):
                 model.index = next_index
                 next_index += 1
             model.audio_file = None
-            if previous and previous.audio_url == model.audio_url:
+            if (
+                previous
+                and previous.audio_file
+                and previous.audio_url == model.audio_url
+                and not audio_format_changed(
+                    effective_audio_format(
+                        previous.audio_url, previous.audio_media_type
+                    ),
+                    effective_audio_format(model.audio_url, model.audio_media_type),
+                )
+            ):
                 model.audio_file = previous.audio_file
             locked[model.pk] = model
         return dict(sorted(locked.items(), key=lambda item: (item[1].index, item[0])))

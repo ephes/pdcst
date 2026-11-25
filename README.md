@@ -83,9 +83,11 @@ in episode JSON. Filename generation keeps recognized URL path suffixes stable
 MPEG/MP3 → `mp3`, MP4/x-m4a → `m4a`, AAC → `aac`, Ogg → `ogg`, Opus → `opus`,
 WAV/x-wav → `wav`, FLAC/x-flac → `flac` (all types have the `audio/` prefix).
 Thus an `audio/mpeg` enclosure at `/download` becomes an `.mp3` file. Old records
-without the field remain readable and retain their former filename fallback;
-refreshing the feed populates the field. Existing `audio_file` associations stay
-valid when only the type changes; existing bytes are not renamed on refresh.
+without the field remain readable and retain their former filename fallback.
+Refreshing the feed populates the field when the enclosure declares a supported
+type. A recognized URL suffix takes precedence when comparing formats. MIME
+aliases for the same format and legacy records with an unknown format can retain
+their download associations.
 
 Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
@@ -115,7 +117,8 @@ Refresh looks up each filename relative to the held episode directory without
 following symlinks. It clears associations to missing or nonregular files,
 repository/recovery names, and files with ambiguous ownership, including
 case/Unicode-equivalent names and aliases to the same file. Episodes in the
-current feed also lose their association if the enclosure URL changed.
+current feed also lose their association if the enclosure URL changed or its
+effective format changed between two known formats.
 Historical episodes keep their feed metadata and usable audio references.
 Refresh also clears references to empty files and files over
 `PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
@@ -567,7 +570,7 @@ enclosure URL, preserving newer titles, dates and indices. If the episode disapp
 or its enclosure changes during transfer, the command reports a conflict and the
 completed audio's `.pdcst-download-*` recovery path. It leaves the destination intact
 and does not associate those bytes with the new enclosure. A feed refresh drops an
-association when its enclosure URL changes, retaining the old audio on disk. Move
+association when its enclosure URL or known format changes, retaining the old audio on disk. Move
 that unowned audio aside before retrying with the same filename. Enclosure identity
 uses the complete URL, including query parameters; feeds that rotate signed or
 tracking URLs therefore invalidate associations even if their audio is unchanged. Recovery files can
