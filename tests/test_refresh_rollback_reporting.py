@@ -3,6 +3,7 @@
 import copy
 import os
 import stat
+import warnings
 from pathlib import Path
 
 import httpx
@@ -10,7 +11,12 @@ import pytest
 
 import pdcst
 from pdcst.download import DownloadError, download_with_progress
-from pdcst.repository import EpisodeRepository, PodcastRepository, StoreWriteError
+from pdcst.repository import (
+    REFRESH_INTENT,
+    EpisodeRepository,
+    PodcastRepository,
+    StoreWriteError,
+)
 from pdcst.storage import PublicationDurabilityError
 
 
@@ -107,6 +113,42 @@ def test_backup_write_failure_leaves_no_recovery_file(
     assert episodes.path.read_bytes() == episodes_before
     assert podcasts.path.read_bytes() == podcasts_before
     assert not list(episodes.base_dir.glob(".pdcst-refresh-*"))
+
+
+def test_pre_intent_sync_failure_retires_backups_without_marker_warning(
+    tmp_path, monkeypatch, podcast, episode
+):
+    podcasts, episodes, parser = _refresh_setup(tmp_path, monkeypatch, podcast, episode)
+    episodes_before = episodes.path.read_bytes()
+    podcasts_before = podcasts.path.read_bytes()
+    sync = os.fsync
+    failed = []
+
+    def fsync(fd):
+        # Persistent directory sync failure once refresh backups exist, before
+        # any intent marker has been written.
+        if stat.S_ISDIR(os.fstat(fd).st_mode) and list(
+            episodes.base_dir.glob(".pdcst-refresh-*.previous")
+        ):
+            assert not (episodes.base_dir / REFRESH_INTENT).exists()
+            assert not (podcasts.base_dir / REFRESH_INTENT).exists()
+            failed.append(True)
+            raise OSError("synthetic pre-intent sync")
+        sync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(OSError, match="synthetic pre-intent sync"):
+            pdcst.subscribe(podcast.feed.url, "{title}", None, parser, podcasts)
+    assert failed
+    assert [str(w.message) for w in caught] == []
+    assert episodes.path.read_bytes() == episodes_before
+    assert podcasts.path.read_bytes() == podcasts_before
+    assert not list(episodes.base_dir.glob(".pdcst-refresh-*"))
+    assert not list(podcasts.base_dir.glob(".pdcst-refresh-*"))
+    assert not (episodes.base_dir / REFRESH_INTENT).exists()
+    assert not (podcasts.base_dir / REFRESH_INTENT).exists()
 
 
 @pytest.mark.parametrize("direct", [False, True])
