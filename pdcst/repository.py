@@ -993,6 +993,7 @@ class EpisodeRepository(JsonRepository):
             reserve_recheck=True,
         )
         claim = self.path.with_suffix(self.path.suffix + ".download.lock")
+        check_directory()
         with advisory_lock(claim, directory_fd=self._directory_fd):
             check_directory()
             # Closing the descriptor releases the claim even when transfer fails.
@@ -1641,43 +1642,66 @@ class PodcastRepository(JsonRepository):
 
     def list_episodes(self, podcast):
         """Read one subscription's episodes and confirm its directory before returning."""
-        try:
-            with self.admitted(create=False) as admitted:
+        with self._browse_episode_selection(podcast) as (_, episodes):
+            return episodes
+
+    @contextmanager
+    def _browse_episode_selection(self, podcast):
+        """Hold the checked directory after reading its episode inventory."""
+        with ExitStack() as stack:
+            try:
+                admitted = stack.enter_context(self.admitted(create=False))
                 directory = admitted._browse_directory(podcast)
-                with ExitStack() as stack:
+                try:
+                    directory.lstat()
+                except FileNotFoundError:
+                    selected = None
+                    episodes = []
+                else:
+                    selected = stack.enter_context(
+                        EpisodeRepository(directory).admitted(
+                            create=False, parent=admitted
+                        )
+                    )
+                    episodes = selected.list(additional_attributes={"podcast": podcast})
+
+                # A catalog writer may have committed while the read was open.
+                admitted._browse_directory(podcast, expected=directory)
+                if selected is None:
+                    admitted._check_directory()
                     try:
                         directory.lstat()
                     except FileNotFoundError:
-                        selected = None
+                        pass
                     else:
-                        selected = stack.enter_context(
-                            EpisodeRepository(directory).admitted(
-                                create=False, parent=admitted
-                            )
-                        )
-                        episodes = selected.list(
-                            additional_attributes={"podcast": podcast}
-                        )
-
-                    # A catalog writer may have committed while the read was open.
-                    admitted._browse_directory(podcast, expected=directory)
-                    if selected is None:
-                        admitted._check_directory()
-                        try:
-                            directory.lstat()
-                        except FileNotFoundError:
-                            return []
                         raise StoreReadError(
                             Path(EpisodeRepository.name),
                             "Podcast subscription directory changed; retry browsing",
                         )
+                else:
                     selected._check_directory()
-                    return episodes
-        except (OSError, StoreWriteError):
-            raise StoreReadError(
-                Path(EpisodeRepository.name),
-                "podcast episode directory is unavailable or unsafe; retry browsing",
-            ) from None
+            except (DirectoryAdmissionError, OSError, StoreWriteError):
+                raise StoreReadError(
+                    Path(EpisodeRepository.name),
+                    "podcast episode directory is unavailable or unsafe; retry browsing",
+                ) from None
+            yield selected, episodes
+
+    @contextmanager
+    def download_selection(self, podcast):
+        """Keep the repository used for selection open through the download."""
+        with self.download_subscription(podcast) as (current, repository):
+            current.validate_audio_filename_pattern()
+            if current._legacy_directory:
+                episodes = (
+                    repository.list(additional_attributes={"podcast": current})
+                    if repository is not None
+                    else []
+                )
+                yield current, repository, episodes
+            else:
+                with self._browse_episode_selection(current) as (selected, episodes):
+                    yield current, selected, episodes
 
     @contextmanager
     def download_subscription(self, podcast):
@@ -1712,10 +1736,12 @@ class PodcastRepository(JsonRepository):
                         locked._serialize_models(rows)
 
                 episodes = EpisodeRepository(resolved)
-                if stored.directory is not None or not os.path.lexists(resolved):
-                    # A missing directory holds no episodes to select; selection
-                    # reports the missing episode and nothing is pinned.
+                if stored.directory is not None:
                     yield current, episodes
+                    return
+                if not os.path.lexists(resolved):
+                    # A missing directory holds no episodes to select.
+                    yield current, None
                     return
 
                 # Keep the directory used by the audio transfer admitted through pinning.
