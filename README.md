@@ -618,14 +618,18 @@ succeeds, and `download_episode` returns the completed destination path. The war
 `.pdcst-download-*.previous` path (it may already be absent if only retirement
 sync failed) without filesystem exception details. That
 backup may be removed manually after checking the new audio and metadata; no
-repeat transfer is needed.
+repeat transfer is needed. Both download cleanup warnings are best effort.
+If a warning filter or handler raises while reporting them, the download
+still returns its completed path.
 
 JSON repositories use stable `.json.lock` files and POSIX advisory locks to
 serialize cooperating writers across reload and atomic replacement. Metadata,
-download and feed lock descriptors must be regular files, opened
-without following symlinks and without blocking on special files. Their named
-inode is checked again after acquisition. Invalid locks raise a bounded
-`StoreWriteError`; move an invalid lock aside only when no commands are running.
+download and feed locks must be regular files with exactly one hard link.
+They are opened without following symlinks or blocking on special files.
+After acquisition, pdcst checks that the name still points to the admitted
+inode and that it still has exactly one hard link. Invalid locks raise a bounded
+`StoreWriteError`. Stop all pdcst commands before moving an invalid lock aside.
+Each lock path can then be recreated independently on the next acquisition.
 (A read that only waits for a publication marker's lock reports both cases as a
 `StoreReadError` naming the marker, with the `StoreWriteError` as its cause; see
 "Interrupted-publication recovery".)
@@ -640,7 +644,8 @@ remain held for their operation. The limit covers acquisition and the lock
 identity check before the operation starts.
 A lock descriptor close is attempted once. If it fails during another error,
 the original error is reported. After a completed operation, a runtime warning
-reports uncertain lock release. The close warning alone requires no repeat write.
+reports uncertain lock release when warning reporting is available. The
+operation still succeeds if a warning filter or handler raises.
 Do not remove any lock file while commands are running. Failed serialization
 or writes before replacement leave the previous JSON intact; leftover temporary files after a killed process
 can be removed when no commands are running. If the staging descriptor fails

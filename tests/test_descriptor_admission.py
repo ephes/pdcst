@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,38 @@ def test_lock_special_files_refused_promptly(tmp_path, kind, special):
     assert external.read_bytes() == b"untouched"
 
 
+@pytest.mark.parametrize("link_before_flock", [True, False])
+def test_hard_linked_lock_refuses_store_write(
+    tmp_path, monkeypatch, episode, link_before_flock
+):
+    import pdcst.repository as module
+
+    repo = EpisodeRepository(tmp_path)
+    repo.add(episode)
+    before = repo.path.read_bytes()
+    episode.title = "updated synthetic title"
+    path = lock_path(tmp_path, "metadata")
+    alias = tmp_path / "other.json.lock"
+    if link_before_flock:
+        os.link(path, alias)
+
+    real_flock = module.fcntl.flock
+    acquisitions = []
+
+    def flock(descriptor, operation):
+        real_flock(descriptor, operation)
+        acquisitions.append(descriptor)
+        if not link_before_flock:
+            os.link(path, alias)
+
+    monkeypatch.setattr(module.fcntl, "flock", flock)
+    with pytest.raises(module.StoreWriteError, match="Cannot acquire lock"):
+        repo.add(episode)
+    assert len(acquisitions) == (0 if link_before_flock else 1)
+    assert path.samefile(alias)
+    assert repo.path.read_bytes() == before
+
+
 @pytest.mark.parametrize("kind", ["metadata", "download", "feed"])
 def test_two_processes_serialize_on_stable_lock(tmp_path, kind, episode):
     import select
@@ -225,7 +258,9 @@ def test_interrupted_lock_wait_closes_descriptor(tmp_path, monkeypatch):
     assert closed == descriptors
 
 
-@pytest.mark.parametrize("outcome", ["refused", "failed", "completed"])
+@pytest.mark.parametrize(
+    "outcome", ["refused", "failed", "completed", "warnings-as-errors"]
+)
 def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, outcome):
     import pdcst.repository as module
 
@@ -244,7 +279,7 @@ def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, out
         with module.advisory_lock(lock):
             if outcome == "failed":
                 raise failure
-            assert outcome == "completed"
+            assert outcome in {"completed", "warnings-as-errors"}
             catalog.write_bytes(b"[]")
 
     monkeypatch.setattr(module.os, "close", failing_close)
@@ -262,6 +297,11 @@ def test_lock_close_failure_preserves_catalog_outcome(tmp_path, monkeypatch, out
         with pytest.raises(ValueError) as raised:
             publish()
         assert raised.value is failure
+    elif outcome == "warnings-as-errors":
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            publish()
+        assert catalog.read_bytes() == b"[]"
     else:
         with pytest.warns(RuntimeWarning, match="lock release uncertain"):
             publish()

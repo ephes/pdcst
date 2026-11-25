@@ -1,7 +1,9 @@
 """Synthetic command-level ownership and feed/download interleavings."""
 
 import copy
+import json
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -417,6 +419,39 @@ def test_metadata_failure_rolls_back_audio(store, monkeypatch, existing_audio, f
     assert repo.all[episode.guid].audio_file == target.name
 
 
+@pytest.mark.parametrize("warning_action", ["always", "error"])
+def test_intent_retirement_failure_is_success(store, monkeypatch, warning_action):
+    from pdcst import repository
+
+    repo, episode, _, calls = store
+    target = repo.base_dir / "same.mp3"
+    marker = repo.base_dir / repository.AUDIO_INTENT
+
+    def fail_retirement(path, **kwargs):
+        assert path == marker
+        raise OSError("synthetic intent cleanup failure")
+
+    monkeypatch.setattr(repository, "clear_intent", fail_retirement)
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter(warning_action, RuntimeWarning)
+        assert (
+            repo.download_episode(episode, target.name, pdcst.download_with_progress)
+            == target
+        )
+
+    if warning_action == "always":
+        (warning,) = recorded
+        assert str(marker) in str(warning.message)
+        assert "do not repeat transfer" in str(warning.message)
+    assert len(calls) == 1
+    assert target.read_bytes() == b"synthetic audio"
+    assert str(target) == json.loads(marker.read_text())["target"]
+    with pytest.raises(repository.StoreReadError, match=repository.AUDIO_INTENT):
+        repo.all
+    marker.unlink()
+    assert repo.all[episode.guid].audio_file == target.name
+
+
 @pytest.mark.parametrize("caller", ["cli", "repository"])
 def test_backup_retirement_failure_is_success(store, monkeypatch, caller):
     from typer.testing import CliRunner
@@ -463,6 +498,42 @@ def test_backup_retirement_failure_is_success(store, monkeypatch, caller):
     backup.unlink()
     assert repo.path.read_bytes() == before
     assert target.read_bytes() == b"synthetic audio"
+
+
+def test_backup_retirement_failure_is_success_when_warnings_raise(store, monkeypatch):
+    from pdcst import repository
+
+    repo, episode, _, calls = store
+    target = repo.base_dir / "same.mp3"
+    episode.audio_file = target.name
+    repo.add(episode)
+    target.write_bytes(b"previous audio")
+    original_unlink = repository.os.unlink
+    injected = []
+
+    def fail_backup(path, *args, **kwargs):
+        path = Path(path)
+        if path.name.endswith(".previous"):
+            injected.append(repo.base_dir / path)
+            raise OSError("private cleanup failure")
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(repository.os, "unlink", fail_backup)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            assert (
+                repo.download_episode(
+                    episode, target.name, pdcst.download_with_progress
+                )
+                == target
+            )
+    assert len(calls) == 1
+    (backup,) = injected
+    assert backup.read_bytes() == b"previous audio"
+    assert target.read_bytes() == b"synthetic audio"
+    assert not (repo.base_dir / repository.AUDIO_INTENT).exists()
+    assert repo.all[episode.guid].audio_file == target.name
 
 
 @pytest.mark.parametrize("rollback_step", ["completed", "previous"])
