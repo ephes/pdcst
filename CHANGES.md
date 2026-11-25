@@ -1,5 +1,8 @@
 # Unreleased
 
+* Continue audio downloads without progress updates when the display fails.
+  Completed transfers can still publish, and incomplete transfers are refused.
+
 * Recheck missing episode directories before returning an empty listing and
   report a retry if the directory appeared during browsing.
 

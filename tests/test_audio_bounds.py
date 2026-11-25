@@ -1,4 +1,5 @@
 import importlib
+import os
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -46,6 +47,91 @@ def test_fragmented_audio_coalesces_progress(tmp_path, monkeypatch):
 
     assert target.read_bytes() == b"x" * 1001
     assert updates == [500, 1000, 1001]
+
+
+@pytest.mark.parametrize("failure", ["start", "add_task", "stream", "final", "stop"])
+@pytest.mark.parametrize("complete", [True, False])
+def test_progress_failure_preserves_transfer_outcome(
+    tmp_path, monkeypatch, failure, complete
+):
+    module = importlib.import_module("pdcst.download")
+    clock = [0.0]
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+    updates, stops, publications = [], [], []
+    target = tmp_path / "audio.mp3"
+    target.write_bytes(b"old audio")
+    body = b"complete" if complete else b"short"
+
+    class BrokenProgress(module.rich.progress.Progress):
+        def start(self):
+            if failure == "start":
+                raise OSError("synthetic start failure")
+
+        def add_task(self, *args, **kwargs):
+            if failure == "add_task":
+                raise OSError("synthetic add-task failure")
+            return 0
+
+        def update(self, task, *, completed):
+            updates.append(completed)
+            if failure in {"stream", "final"}:
+                raise OSError("synthetic update failure")
+
+        def stop(self):
+            stops.append(1)
+            if failure == "stop":
+                raise OSError("synthetic stop failure")
+
+    class Stream(httpx.SyncByteStream):
+        def __iter__(self):
+            if failure == "stream":
+                clock[0] += 1
+            yield body[:1]
+            if failure == "stream":
+                clock[0] += 1
+            yield body[1:]
+
+    def respond(request):
+        return httpx.Response(200, headers={"Content-Length": "8"}, stream=Stream())
+
+    replace = os.replace
+
+    def record_replace(source, destination, **kwargs):
+        if destination == target.name:
+            publications.append(destination)
+        return replace(source, destination, **kwargs)
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
+    )
+    monkeypatch.setattr(module.rich.progress, "Progress", BrokenProgress)
+    monkeypatch.setattr(os, "replace", record_replace)
+
+    url = "https://example.invalid/audio"
+    if complete:
+        assert module.download_with_progress(url, target) == target
+        assert target.read_bytes() == body
+    else:
+        with pytest.raises(module.DownloadError, match="Incomplete media response"):
+            module.download_with_progress(url, target)
+        assert target.read_bytes() == b"old audio"
+
+    assert publications == ([target.name] if complete else [])
+    assert stops == [1]
+    assert (
+        updates
+        == {
+            "start": [],
+            "add_task": [],
+            "stream": [1],
+            "final": [len(body)],
+            "stop": [len(body)],
+        }[failure]
+    )
+    assert list(tmp_path.iterdir()) == [target]
 
 
 @pytest.mark.parametrize(
