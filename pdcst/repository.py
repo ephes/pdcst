@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from math import isfinite
-from operator import itemgetter
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
@@ -1969,52 +1968,59 @@ class FeedParserRepository:
 
     @classmethod
     def parse_feed_entries(cls, entries):
-        """Keep usable episodes and report a bounded count of skipped entries."""
+        """Return dictionaries for usable episodes in publication order."""
+        return [
+            episode.dict(exclude={"audio_file"})
+            for episode in cls._parse_feed_entry_models(entries)
+        ]
+
+    @classmethod
+    def _parse_feed_entry_models(cls, entries):
         episodes = []
         skipped = 0
         for entry in entries:
             try:
                 audio_url, media_type = cls.audio_enclosure(entry)
-                episode = {
-                    "guid": entry["id"],
-                    "audio_url": audio_url,
-                    "audio_media_type": media_type,
-                    "published": parsed_date(entry["published_parsed"]),
-                    "title": entry["title"],
-                }
+                guid, title = entry["id"], entry["title"]
                 if not all(
-                    isinstance(episode[key], str) and episode[key].strip()
-                    for key in ("guid", "title")
+                    isinstance(value, str) and value.strip() for value in (guid, title)
                 ):
                     raise ValueError("Missing episode identity or title")
+                episode = EpisodeInDb(
+                    index=len(episodes) + 1,
+                    guid=guid,
+                    audio_url=audio_url,
+                    audio_media_type=media_type,
+                    published=parsed_date(entry["published_parsed"]),
+                    title=title,
+                )
             except (KeyError, AttributeError, TypeError, ValueError, IndexError):
                 skipped += 1
                 continue
             episodes.append(episode)
         try:
-            index_unique(episodes, lambda episode: episode["guid"])
+            index_unique(episodes, lambda episode: episode.guid)
         except DuplicateIdentity as error:
             raise FeedError(f"{error} (usable feed entries)") from None
         if not episodes:
             raise FeedError("Feed has no usable audio episodes")
         if skipped:
             warnings.warn(
-                f"Skipped {skipped} unusable feed entry/entries", stacklevel=2
+                f"Skipped {skipped} unusable feed entry/entries", stacklevel=3
             )
-        episodes.sort(key=itemgetter("published"))
+        episodes.sort(key=lambda episode: episode.published)
         for index, episode in enumerate(episodes, 1):
-            episode["index"] = index
+            episode.index = index
         return episodes
 
     def get(self, url, directory, episode_name_pattern):
-        """Fetch a feed; channel update defaults to the newest usable episode."""
+        """Fetch a feed and bound its update date by the newest usable episode."""
         document = self.fetch_document(url)
         title = document.get("feed", {}).get("title")
         if not isinstance(title, str) or not title.strip():
             raise FeedError("Feed is missing a title")
 
-        episodes_from_feed = self.parse_feed_entries(document.get("entries", []))
-        validated_episodes = [EpisodeInDb(**episode) for episode in episodes_from_feed]
+        validated_episodes = self._parse_feed_entry_models(document.get("entries", []))
         updated = validated_episodes[-1].published
         channel = document["feed"]
         # Read raw keys rather than feedparser's deprecated updated/pubDate alias.
@@ -2025,7 +2031,7 @@ class FeedParserRepository:
         ):
             if date:
                 try:
-                    updated = parsed_date(date)
+                    updated = max(updated, parsed_date(date))
                 except (TypeError, ValueError, IndexError):
                     continue
                 break
@@ -2041,7 +2047,7 @@ class FeedParserRepository:
         )
         podcast = Podcast.from_dict(podcast_in_db.dict())
 
-        # validate and build episodes
+        # Build domain episodes from the validated rows.
         episodes = [
             Episode.from_dict(episode.dict() | {"podcast": podcast})
             for episode in validated_episodes

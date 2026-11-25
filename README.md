@@ -51,11 +51,11 @@ $ pdcst add https://python-podcast.de/show/feed/podcast/mp3/rss.xml --name-patte
 ```
 
 Feeds must have a channel title and at least one usable audio episode (an ID,
-title, publication date, and audio enclosure). The stored feed update date uses
-the first valid value from channel update date (`lastBuildDate`/Atom `updated`),
-channel publication date (`pubDate`), HTTP `Last-Modified`, then the newest usable
-episode publication date. Previously only HTTP `Last-Modified` was used; it is
-now preserved as a fallback rather than required. Empty or unusable feeds raise
+title, publication date, and audio enclosure). The stored feed update date is
+at least as recent as the newest usable episode. It uses a newer metadata date
+if available, selecting the first valid timestamp in this order: channel update
+(`lastBuildDate`/Atom `updated`), channel publication (`pubDate`), HTTP
+`Last-Modified`. Empty or unusable feeds raise
 `pdcst.repository.FeedError` (a `ValueError`) with a short diagnostic message.
 
 Import chooses the first valid HTTP(S) enclosure whose declared media type is
@@ -65,7 +65,8 @@ an enclosure without a media type may be used when its URL path ends in .mp3,
 .m4a, .aac, .ogg, .oga, .opus, .wav, or .flac (case insensitive; query strings
 are ignored). Explicit types outside the supported list are rejected, even with
 an audio extension. Enclosure URLs containing whitespace are rejected.
-Unusable entries are skipped with a warning reporting their count; valid sibling
+Entries that fail episode model validation are skipped along with other unusable
+entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available. On first import they receive chronological indices
 (with GUID order breaking equal-date ties). Refresh retains every stored GUID and
 its index, including entries absent from a rolling feed. New GUIDs receive indices
@@ -357,7 +358,10 @@ fetching the feed. When a library caller supplies a `PodcastRepository` to
 validation, directory ownership and the location of both metadata stores.
 Ordinary custom and hidden directories such as `.shows` remain supported.
 Legacy stored reserved directories must be corrected before refresh.
-Filename patterns must produce a single relative filename. Supported placeholders are
+Filename patterns must produce a single relative filename that is valid on
+Windows. Device names such as `CON.mp3`, forbidden Windows filename characters
+and trailing dots or spaces are refused when the name is rendered. Supported
+placeholders are
 `{index}`, `{title}` and `{file_format}`. Integer formatting such as `{index:03}`
 and escaped literal braces are supported; attribute/index traversal, conversions
 and nested fields are rejected with a bounded `FilenamePatternError` (`ValueError`)
@@ -371,10 +375,12 @@ downloaded filenames remain associated without renaming. Both `add` and
 `download` report pattern failures as concise CLI errors. Formatting accepts the
 standard spec syntax with bounded numbers (every width/precision 0–255): an
 optional fill and alignment (`<`, `>`, `^`, `=`); for `index` also sign, `#`, zero padding,
-grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`, `n` (not `c`);
+grouping (`,`/`_`) and the integer types `b`, `d`, `o`, `x`, `X`;
 string fields accept width (not starting with `0`) and/or `.precision`,
 optionally followed by `s`. For example, `{index:03d}_{title:.100}.{file_format}`
 limits the title to 100 characters and `{index:>3}` right-aligns the index.
+Replace the locale-dependent index type `n` in stored patterns with `d`, or use
+`,d` or `_d` for explicit grouping.
 Only referenced fields are prepared, so `{index:03}.mp3` needs neither title
 sanitization nor extension lookup. Repeated fields reuse their prepared values.
 Other format syntax is refused before formatting. Patterns are limited to 4,096

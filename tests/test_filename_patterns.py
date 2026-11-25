@@ -32,6 +32,58 @@ def test_padded_index_and_escaped_braces(podcast, episode):
     assert podcast.get_audio_file_name(episode) == "{show}_001_refactoring.mp3"
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "{title:.3}.mp3",
+        "nUl .mp3",
+        "LPT².archive.mp3",
+        "CONIN$.mp3",
+        "episode.mp3.",
+        "episode.mp3 ",
+        "episode.mp3:stream",
+        "episode\t.mp3",
+    ],
+)
+def test_windows_incompatible_basename_is_refused(podcast, episode, pattern):
+    # Precision can turn a title into a device name after formatting.
+    episode.title = "CONcert"
+    podcast.file_name_pattern = pattern
+    with pytest.raises(FilenamePatternError, match="Invalid filename pattern"):
+        podcast.get_audio_file_name(episode)
+
+
+def test_ordinary_dotted_basename_is_portable(podcast, episode):
+    podcast.file_name_pattern = "com10.{title}.archive.mp3"
+    assert podcast.get_audio_file_name(episode) == "com10.refactoring.archive.mp3"
+
+
+@pytest.mark.parametrize("locale_separator", [",", "."])
+def test_locale_sensitive_index_has_migration_error(
+    podcast, episode, monkeypatch, locale_separator
+):
+    locale_calls = []
+
+    def simulated_format(value, spec):
+        if spec.endswith("n"):
+            locale_calls.append(spec)
+            return format(value, ",d").replace(",", locale_separator)
+        return format(value, spec)
+
+    monkeypatch.setattr("pdcst.models.format", simulated_format, raising=False)
+    episode.index = 12345
+    podcast.file_name_pattern = "{index:04n}.mp3"
+    with pytest.raises(FilenamePatternError, match="replace.*n.*with.*d"):
+        podcast.get_audio_file_name(episode)
+    with pytest.raises(FilenamePatternError, match="replace.*n.*with.*d"):
+        podcast.validate_audio_filename_pattern()
+    # The refusal happens before any locale-dependent formatting is attempted.
+    assert locale_calls == []
+
+    podcast.file_name_pattern = "{index:,d}_{index:_d}.mp3"
+    assert podcast.get_audio_file_name(episode) == "12,345_12_345.mp3"
+
+
 def test_filename_resolves_only_referenced_fields_once(podcast, episode, monkeypatch):
     calls = []
     sanitize = podcast.title_for_filename
@@ -85,7 +137,8 @@ def test_expansion_rejected_before_formatting(podcast, episode, pattern, monkeyp
 
 
 @pytest.mark.parametrize(
-    "pattern,size", [("{index:0255d}", 255), ("{title:255}", 255), ("{title:.255}", 11)]
+    "pattern,size",
+    [("{index:0255d}", 255), ("{title:_<255}", 255), ("{title:.255}", 11)],
 )
 def test_format_limit_boundary(podcast, episode, pattern, size):
     podcast.file_name_pattern = pattern

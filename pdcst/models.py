@@ -4,12 +4,15 @@ All the domain models for pdcst live here.
 
 import re
 from functools import partial
-from pathlib import PureWindowsPath
 from string import Formatter
 from urllib.parse import urlsplit
 
 FILENAME_MAX_BYTES = 255
 FILENAME_PATTERN_MAX_CHARS = 4096
+WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{prefix}{digit}" for prefix in ("COM", "LPT") for digit in "123456789¹²³"
+}
+WINDOWS_FORBIDDEN_CHARS = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
 FILENAME_PATTERN_ERROR = (
     "Invalid filename pattern: use index, title and file_format; "
     "decimal width/precision and filename bytes must be at most 255"
@@ -17,7 +20,8 @@ FILENAME_PATTERN_ERROR = (
 # Standard format-spec syntax with bounded numbers (each at most 255, checked
 # separately): optional fill+alignment, then for the integer index sign,
 # "#", zero padding, width, grouping and an integer type (no "c", which could
-# emit arbitrary characters); for text fields width, precision and "s". Text
+# emit arbitrary characters); "n" is recognized for a migration diagnostic.
+# Text fields allow width, precision and "s". Text
 # widths cannot start with 0 (that would zero-fill strings on the right).
 _ALIGN = r"(?:[^{}]?[<>=^])?"
 INDEX_SPEC = _ALIGN + r"[+\- ]?#?0?[0-9]{0,3}[,_]?[bdoxXn]?"
@@ -154,9 +158,14 @@ class Podcast:
                     )
                 ):
                     raise ValueError
-            return parts
         except ValueError:
             raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
+        if any(field == "index" and spec.endswith("n") for _, field, spec, _ in parts):
+            raise FilenamePatternError(
+                "Invalid filename pattern: replace locale-dependent index type 'n' with 'd' "
+                "(use ',d' or '_d' for grouping)"
+            )
+        return parts
 
     def validate_audio_filename_pattern(self):
         """Admit filename format syntax without loading an episode."""
@@ -221,14 +230,12 @@ class Podcast:
             raise FilenamePatternError(FILENAME_PATTERN_ERROR) from None
         if (
             not name
-            or name in {".", ".."}
-            or "/" in name
-            or "\\" in name
-            or "\x00" in name
-            or PureWindowsPath(name).drive
+            or name.endswith((".", " "))
+            or WINDOWS_FORBIDDEN_CHARS.search(name)
+            or name.partition(".")[0].rstrip(" ").upper() in WINDOWS_DEVICE_NAMES
         ):
             raise FilenamePatternError(
-                "Invalid filename pattern: episode name must be a single relative file name"
+                "Invalid filename pattern: episode name must be a Windows-compatible basename"
             )
         return name
 
