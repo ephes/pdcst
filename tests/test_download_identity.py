@@ -12,25 +12,31 @@ import pytest
 import typer
 
 import pdcst
-from pdcst.repository import EpisodeRepository
+from pdcst.repository import EpisodeRepository, PodcastRepository
 
 
 @pytest.fixture
 def store(tmp_path, monkeypatch, podcast, episode):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     podcast.file_name_pattern = "{title}.mp3"
+    podcast.title = "Synthetic Show"
+    PodcastRepository(tmp_path).add(podcast)
     episode.title = "same"
     episode.audio_url = "https://example.test/old.mp3"
     other = copy.deepcopy(episode)
     other.guid = "second-guid"
     repo = EpisodeRepository(tmp_path / podcast.directory)
     repo.add_list([episode, other])
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
-    monkeypatch.setattr(
-        pdcst,
-        "find_episode_by_identifier",
-        lambda _, key, **kw: copy.deepcopy(episode if key == "first" else other),
-    )
+    find_title = pdcst._find_title
+
+    def select(items, key, kind, unique):
+        if kind == "episode":
+            # Both titles produce the same filename. Choose by test identifier
+            # and allow the fixture to supply a stale selection.
+            return copy.deepcopy(episode if key == "first" else other)
+        return find_title(items, key, kind, unique)
+
+    monkeypatch.setattr(pdcst, "_find_title", select)
     calls = []
 
     def transfer(url, target, **kwargs):
@@ -110,6 +116,7 @@ def test_unowned_file_is_preserved(store, name):
 def test_repository_files_cannot_be_audio(store, pattern):
     repo, episode, _, calls = store
     episode.podcast.file_name_pattern = pattern
+    PodcastRepository(repo.base_dir.parent).add(episode.podcast)
     before = repo.path.read_bytes()
     with pytest.raises(typer.BadParameter, match="reserved"):
         pdcst.download("show", "first")

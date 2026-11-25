@@ -1,5 +1,8 @@
 # Unreleased
 
+* Keep the episode directory open from selection through download for pinned
+  subscriptions. Refuse the transfer if that directory was moved or replaced.
+
 * Sync the containing directory when retrying intent cleanup after unlink,
   even if the marker is already gone. Refresh cleanup retires only markers it
   tried to write, so a sync failure before any marker exists still removes the

@@ -262,6 +262,10 @@ in the metadata. Download selection counts matches and checks for exact titles
 in one pass. Browsing stops matching at the first substring match.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
+For subscriptions with a saved directory, `download` holds the same directory
+open from episode listing through transfer. If the directory is moved or
+replaced after selection, the download is refused. Retry to select an episode
+from the current directory.
 The first successful download for a legacy subscription saves the selected
 directory in `podcasts.json`. Migration holds the per-feed lock through
 transfer and pinning. The catalog writer lock is held briefly to check ownership

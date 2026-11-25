@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 
@@ -12,8 +13,10 @@ from pdcst.repository import EpisodeRepository, PodcastRepository
 
 def test_download_selections(tmp_path, monkeypatch, podcast, episode):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
-    monkeypatch.setattr(pdcst, "list_all_podcasts", lambda: [podcast])
-    monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: [episode])
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    directory = tmp_path / podcast.directory
+    catalog_files = set(tmp_path.iterdir())
     calls = []
 
     def transfer(url, stage, **kwargs):
@@ -30,8 +33,8 @@ def test_download_selections(tmp_path, monkeypatch, podcast, episode):
         assert result.exit_code != 0
         assert message in result.output
         assert "Traceback" not in result.output
-        assert not calls and not list(tmp_path.iterdir())
-    EpisodeRepository(tmp_path / podcast.directory).add(episode)
+        assert not calls and set(tmp_path.iterdir()) == catalog_files
+    EpisodeRepository(directory).add(episode)
     result = runner.invoke(pdcst.cli, ["download", "PyThOn", "ReFaCtOr"], color=False)
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
@@ -48,11 +51,15 @@ def test_ambiguous_downloads_never_mutate(tmp_path, monkeypatch, podcast, episod
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     other_show = copy.deepcopy(podcast)
     other_show.title += " Extra"
+    other_show.directory = "other"
+    other_show.feed.url = "https://example.test/other.xml"
     other_episode = copy.deepcopy(episode)
     other_episode.title += " Extra"
     other_episode.guid = "other"
-    monkeypatch.setattr(pdcst, "list_all_podcasts", lambda: [podcast, other_show])
-    monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: [episode, other_episode])
+    PodcastRepository(tmp_path).add_list([podcast, other_show])
+    directory = tmp_path / podcast.directory
+    EpisodeRepository(directory).add_list([episode, other_episode])
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
     def forbidden(*args):
         raise AssertionError("ambiguous selection reached mutation")
@@ -67,7 +74,7 @@ def test_ambiguous_downloads_never_mutate(tmp_path, monkeypatch, podcast, episod
         result = CliRunner().invoke(pdcst.cli, ["download", show, title])
         assert result.exit_code != 0
         assert message in result.output
-        assert not list(tmp_path.iterdir())
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
     # The library helper defaults to the first match.
     assert pdcst.find_podcast_by_identifier("python") == podcast
 
@@ -77,11 +84,14 @@ def test_exact_titles_disambiguate_download(tmp_path, monkeypatch, podcast, epis
 
     other_show = copy.deepcopy(podcast)
     other_show.title += " Extra"
+    other_show.directory = "other"
+    other_show.feed.url = "https://example.test/other.xml"
     other_episode = copy.deepcopy(episode)
     other_episode.title += " Extra"
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
-    monkeypatch.setattr(pdcst, "list_all_podcasts", lambda: [other_show, podcast])
-    monkeypatch.setattr(pdcst, "list_all_episodes", lambda _: [other_episode, episode])
+    other_episode.guid = "other"
+    PodcastRepository(tmp_path).add_list([other_show, podcast])
+    EpisodeRepository(tmp_path / podcast.directory).add_list([other_episode, episode])
     calls = []
     monkeypatch.setattr(
         EpisodeRepository, "download_episode", lambda self, *args: calls.append(args)
@@ -90,7 +100,7 @@ def test_exact_titles_disambiguate_download(tmp_path, monkeypatch, podcast, epis
         pdcst.cli, ["download", podcast.title.swapcase(), episode.title.swapcase()]
     )
     assert result.exit_code == 0, result.output
-    assert calls[0][0] is episode
+    assert calls[0][0].guid == episode.guid
 
 
 def test_duplicate_exact_titles_are_ambiguous(monkeypatch, podcast):
@@ -213,6 +223,50 @@ def _forbid_transfer(monkeypatch):
         raise AssertionError("refused legacy directory reached the transfer")
 
     monkeypatch.setattr(pdcst, "download_with_progress", forbidden)
+
+
+def test_pinned_download_refuses_directory_replaced_after_selection(
+    tmp_path, monkeypatch, podcast, episode
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.file_name_pattern = "saved.mp3"
+    episode.audio_url = "https://example.test/episode.mp3"
+    shows = PodcastRepository(tmp_path)
+    shows.add(podcast)
+    original_catalog = shows.path.read_bytes()
+    chosen = tmp_path / podcast.directory
+    moved = tmp_path / "original"
+    episodes = EpisodeRepository(chosen)
+    episodes.add(episode)
+    original_files = {path.name: path.read_bytes() for path in chosen.iterdir()}
+    select_title = pdcst._find_title
+
+    def select_then_replace(items, identifier, kind, *args, **kwargs):
+        selection = select_title(items, identifier, kind, *args, **kwargs)
+        if kind == "episode":
+            assert selection.guid == episode.guid
+            chosen.rename(moved)
+            shutil.copytree(moved, chosen)
+        return selection
+
+    calls = []
+
+    def transfer(url, stage, **kwargs):
+        calls.append(url)
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "_find_title", select_then_replace)
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    result = CliRunner().invoke(pdcst.cli, ["download", podcast.title, episode.title])
+
+    assert result.exit_code == 2
+    assert "directory identity changed" in result.output.lower()
+    assert not calls
+    assert shows.path.read_bytes() == original_catalog
+    for directory in (chosen, moved):
+        assert {path.name: path.read_bytes() for path in directory.iterdir()} == (
+            original_files
+        )
 
 
 def test_legacy_subscription_without_episode_directory_reports_missing_episode(

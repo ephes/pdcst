@@ -119,8 +119,7 @@ def test_download_atomic(tmp_path, monkeypatch, case):
 
 def test_download_failure_leaves_metadata(tmp_path, monkeypatch, podcast, episode):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
-    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
+    PodcastRepository(tmp_path).add(podcast)
 
     def fail(*_, **kwargs):
         raise httpx.ReadError("disconnect")
@@ -130,7 +129,7 @@ def test_download_failure_leaves_metadata(tmp_path, monkeypatch, podcast, episod
     before = repo.path.read_bytes()
     monkeypatch.setattr(pdcst, "download_with_progress", fail)
     with pytest.raises(httpx.ReadError):
-        pdcst.download("python", "rest")
+        pdcst.download(podcast.title, episode.title)
     assert episode.audio_file is None
     assert repo.path.read_bytes() == before
     assert not list(repo.base_dir.glob(".pdcst-download-*"))

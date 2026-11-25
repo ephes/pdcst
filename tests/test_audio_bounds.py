@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 import pdcst
 from pdcst.config import Settings
-from pdcst.repository import EpisodeRepository
+from pdcst.repository import EpisodeRepository, PodcastRepository
 
 
 def test_fragmented_audio_coalesces_progress(tmp_path, monkeypatch):
@@ -169,8 +169,7 @@ def test_audio_budget_preserves_audio_and_metadata(
             return task
 
         monkeypatch.setattr(module.rich.progress.Progress, "add_task", slow_add_task)
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
-    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
+    PodcastRepository(tmp_path).add(podcast)
     repo = EpisodeRepository(tmp_path / podcast.directory)
     episode.audio_file = podcast.get_audio_file_name(episode)
     repo.add(episode)
@@ -212,7 +211,7 @@ def test_audio_budget_preserves_audio_and_metadata(
         lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
     )
     with pytest.raises(typer.BadParameter, match="Audio download.*limit"):
-        pdcst.download("synthetic", "synthetic")
+        pdcst.download(podcast.title, episode.title)
     assert target.read_bytes() == b"old"
     assert repo.path.read_bytes() == before
     assert episode.audio_file == target.name

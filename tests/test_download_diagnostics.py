@@ -48,13 +48,12 @@ def test_cli_download_errors_are_private_and_preserve_state(
     episode.audio_url = URL
     episode.audio_file = "saved.mp3"
     podcast.file_name_pattern = "saved.mp3"
+    PodcastRepository(tmp_path).add(podcast)
     repo = EpisodeRepository(tmp_path / podcast.directory)
     repo.add(episode)
     target = repo.base_dir / "saved.mp3"
     target.write_bytes(b"old audio")
     before = repo.path.read_bytes()
-    monkeypatch.setattr(pdcst, "find_podcast_by_identifier", lambda _, **kw: podcast)
-    monkeypatch.setattr(pdcst, "find_episode_by_identifier", lambda *_, **kw: episode)
 
     class Stream(httpx.SyncByteStream):
         def __iter__(self):
@@ -96,7 +95,8 @@ def test_cli_download_errors_are_private_and_preserve_state(
         "Client",
         lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
     )
-    result = CliRunner().invoke(pdcst.cli, ["download", "show", "episode"], color=False)
+    args = ["download", podcast.title, episode.title]
+    result = CliRunner().invoke(pdcst.cli, args, color=False)
     assert result.exit_code != 0
     assert message in result.output
     rendered = result.output + "".join(traceback.format_exception(result.exception))
@@ -110,7 +110,7 @@ def test_cli_download_errors_are_private_and_preserve_state(
     assert not list(repo.base_dir.glob("*.tmp"))
     if case in {"partial", "range-header"}:
         retry[0] = True
-        result = CliRunner().invoke(pdcst.cli, ["download", "show", "episode"])
+        result = CliRunner().invoke(pdcst.cli, args)
         assert result.exit_code == 0, result.output
         assert target.read_bytes() == b"complete"
 
