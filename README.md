@@ -565,12 +565,14 @@ processes do not replace individual files after the final generation check.
 Directory operations remain bound to the admitted descriptors. These checks do
 not validate audio codecs.
 
-Downloads commit only the local filename against the current GUID and captured
-enclosure URL, preserving newer titles, dates and indices. If the episode disappears
-or its enclosure changes during transfer, the command reports a conflict and the
-completed audio's `.pdcst-download-*` recovery path. It leaves the destination intact
-and does not associate those bytes with the new enclosure. A feed refresh drops an
-association when its enclosure URL or known format changes, retaining the old audio on disk. Move
+Downloads recheck the selected GUID, enclosure URL and effective enclosure format
+before transfer and before publication. If the episode disappears, the URL
+changes, or two known formats differ, the command reports a conflict. When
+transfer has completed, the error includes the audio's `.pdcst-download-*`
+recovery path and the destination is left intact. Retry to select the current
+enclosure. A successful download updates only the local filename, preserving
+newer titles, dates and indices. A feed refresh drops an association when its
+enclosure URL or known format changes, retaining the old audio on disk. Move
 that unowned audio aside before retrying with the same filename. Enclosure identity
 uses the complete URL, including query parameters; feeds that rotate signed or
 tracking URLs therefore invalidate associations even if their audio is unchanged. Recovery files can

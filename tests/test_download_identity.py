@@ -247,6 +247,60 @@ def test_stale_selection_is_refused_before_transfer(store, change):
     assert repo.path.read_bytes() == before
 
 
+@pytest.mark.parametrize("refresh_before_transfer", [True, False])
+def test_download_refuses_same_url_format_change(
+    tmp_path, monkeypatch, podcast, episode, refresh_before_transfer
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    podcast.file_name_pattern = "{index}.{file_format}"
+    PodcastRepository(tmp_path).add(podcast)
+    episode.audio_url = "https://example.test/download"
+    episode.audio_media_type = "audio/mpeg"
+    repo = EpisodeRepository(tmp_path / podcast.directory)
+    repo.add(episode)
+    fresh = copy.copy(episode)
+    fresh.audio_media_type = "audio/mp4"
+    refreshed = False
+    transfers = []
+
+    def refresh():
+        nonlocal refreshed
+        repo.import_list([fresh])
+        refreshed = True
+
+    download = EpisodeRepository.download_episode
+
+    def start(repository, selected, name, transfer):
+        if refresh_before_transfer and not refreshed:
+            refresh()
+        return download(repository, selected, name, transfer)
+
+    def transfer(url, stage, **kwargs):
+        assert url == episode.audio_url
+        transfers.append(stage)
+        stage.write_bytes(b"completed media")
+        if not refreshed:
+            refresh()
+
+    monkeypatch.setattr(EpisodeRepository, "download_episode", start)
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    with pytest.raises(typer.BadParameter, match="enclosure changed") as error:
+        pdcst.download(podcast.title, episode.title)
+    assert not (repo.base_dir / "1.mp3").exists()
+    assert repo.all[episode.guid].audio_media_type == "audio/mp4"
+    assert repo.all[episode.guid].audio_file is None
+    if refresh_before_transfer:
+        assert not transfers
+    else:
+        (stage,) = transfers
+        assert f"retained at {stage}" in str(error.value)
+        assert stage.read_bytes() == b"completed media"
+
+    pdcst.download(podcast.title, episode.title)
+    assert repo.all[episode.guid].audio_file == "1.m4a"
+    assert (repo.base_dir / "1.m4a").read_bytes() == b"completed media"
+
+
 def test_ownership_is_rechecked_before_publication(store, monkeypatch):
     repo, _, other, _ = store
     target = repo.base_dir / "same.mp3"

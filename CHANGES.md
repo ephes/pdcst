@@ -1,5 +1,8 @@
 # Unreleased
 
+* Recheck the selected enclosure format before transferring or publishing a
+  download, including when the enclosure URL stays the same.
+
 * Clear download associations when a feed refresh changes the known enclosure
   format at the same URL. Keep the old audio on disk.
 
