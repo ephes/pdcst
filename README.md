@@ -63,10 +63,11 @@ if available, selecting the first valid timestamp in this order: channel update
 Import chooses the first valid HTTP(S) enclosure whose declared media type is
 supported: audio/mpeg, audio/mp3, audio/mp4, audio/aac, audio/x-m4a, audio/ogg,
 audio/opus, audio/wav, audio/x-wav, audio/flac, or audio/x-flac. If none matches,
-an enclosure without a media type may be used when its URL path ends in .mp3,
-.m4a, .aac, .ogg, .oga, .opus, .wav, or .flac (case insensitive; query strings
-are ignored). Explicit types outside the supported list are rejected, even with
-an audio extension. Enclosure URLs containing whitespace are rejected.
+import uses the first enclosure with no media type, `application/octet-stream`
+or `binary/octet-stream` whose URL path ends in .mp3, .m4a, .aac, .ogg, .oga,
+.opus, .wav, or .flac (case insensitive, ignoring query strings). Other explicit
+types are rejected even with an audio extension. Enclosure URLs containing
+whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available. On first import they receive chronological indices
@@ -194,6 +195,8 @@ title, including when the store is empty, also exits with status 2 and reports
 `No matching podcast`. A matching subscription with no episodes succeeds with
 no output. Both commands read local
 metadata under `PDCST_HOME`; they do not refresh feeds or download audio.
+`pdcst episodes amber --show-guid` appends each episode's feed GUID after a tab.
+GUIDs use the same terminal escaping as titles.
 If the selected episode directory cannot be resolved safely, `episodes` exits
 with status 2 and a directory diagnostic. Check the subscription directory and
 its symlink targets under `PDCST_HOME`.
@@ -261,12 +264,18 @@ or metadata. A mislabeled CDN must use one of the supported types; a filename
 extension does not override its response declaration. This checks the declared
 type, without decoding or sniffing the media bytes.
 
-Downloads require a unique match for both titles; a unique exact title takes
+Title-based selection requires a unique match; a unique exact title takes
 precedence over partial matches. Empty identifiers and ambiguous matches return
 a bounded error with the match count and disambiguation guidance. Use an exact
-title or a more specific substring; duplicate exact titles must first be corrected
-in the metadata. Download selection counts matches and checks for exact titles
-in one pass. Browsing stops matching at the first substring match.
+title or a more specific substring. For episodes with identical titles, get the
+GUID from `pdcst episodes python --show-guid` and select it explicitly:
+
+```shell
+$ pdcst download python --guid 'episode-guid'
+```
+
+`--guid` requires the complete, case-sensitive GUID from the selected feed.
+Supply either the episode title argument or `--guid`.
 A missing podcast or episode returns a concise error and nonzero exit status
 before computing download paths, writing metadata, or fetching audio.
 For subscriptions with a saved directory, `download` holds the same directory

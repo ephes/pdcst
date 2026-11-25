@@ -1,5 +1,11 @@
 # Unreleased
 
+* Import enclosures declared as generic binary when their URL path has a known
+  audio suffix. Prefer enclosures with a supported audio media type.
+
+* Show episode GUIDs with `episodes --show-guid` and select a download by exact
+  feed GUID with `download --guid`, including episodes with identical titles.
+
 * Accept an episode's update timestamp when it has no usable publication
   timestamp, including Atom entries with only `updated`.
 

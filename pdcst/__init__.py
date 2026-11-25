@@ -296,10 +296,10 @@ def _find_title(items, identifier, kind, unique):
 
     count = exact_count or match_count
     if count > 1:
-        raise SelectionError(
-            f"Ambiguous {kind} ({count} matches); "
-            "use an exact title or a more specific title substring"
-        )
+        guidance = "use an exact title or a more specific title substring"
+        if kind == "episode":
+            guidance += ", or use --guid with an exact episode GUID"
+        raise SelectionError(f"Ambiguous {kind} ({count} matches); {guidance}")
     return first_exact if exact_count else first_match
 
 
@@ -384,7 +384,7 @@ def list_podcasts():
 
 
 @cli.command(name="episodes")
-def list_episodes(identifier: str):
+def list_episodes(identifier: str, show_guid: bool = False):
     """
     List the available episodes for a podcast.
 
@@ -398,16 +398,23 @@ def list_episodes(identifier: str):
     except (DuplicateIdentity, SelectionError, StoreReadError) as error:
         raise typer.BadParameter(str(error)) from None
     for episode in episodes:
-        print(terminal_text(episode))
+        title = terminal_text(episode)
+        print(f"{title}\t{terminal_text(episode.guid)}" if show_guid else title)
 
 
-@cli.command()
-def download(podcast: str, episode: str):
-    """
-    Download a podcast episode.
+@cli.command(name="download")
+def download_command(
+    podcast: str,
+    episode: str = typer.Argument(None, help="Episode title or title substring"),
+    guid: str = typer.Option(None, "--guid", help="Exact episode GUID in this feed"),
+):
+    """Download a podcast episode."""
+    download(podcast, episode, guid=guid)
 
-    pdcst download python htmx
-    """
+
+def download(podcast: str, episode: str | None = None, *, guid: str | None = None):
+    if (episode is None) == (guid is None):
+        raise typer.BadParameter("Supply an episode title or --guid")
     try:
         podcast = find_podcast_by_identifier(podcast, unique=True)
         if podcast is None:
@@ -418,11 +425,14 @@ def download(podcast: str, episode: str):
             repository,
             episodes,
         ):
-            episode = _find_title(episodes, episode, "episode", unique=True)
-            if episode is None:
+            if guid is None:
+                selected = _find_title(episodes, episode, "episode", unique=True)
+            else:
+                selected = next((item for item in episodes if item.guid == guid), None)
+            if selected is None:
                 raise typer.BadParameter("No matching episode")
             repository.download_episode(
-                episode, podcast.get_audio_file_name(episode), download_with_progress
+                selected, podcast.get_audio_file_name(selected), download_with_progress
             )
     except (
         DownloadConflict,

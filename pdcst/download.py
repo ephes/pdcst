@@ -13,12 +13,14 @@ from .config import settings
 from .models import AUDIO_MIME_EXTENSIONS
 from .storage import DirectoryAdmissionError, admitted_directory, replacement_file
 
-MEDIA_TYPES = frozenset(AUDIO_MIME_EXTENSIONS) | {
-    "application/ogg",
-    "application/mp4",
-    "application/octet-stream",
-    "binary/octet-stream",
-}
+GENERIC_BINARY_MEDIA_TYPES = frozenset(
+    {"application/octet-stream", "binary/octet-stream"}
+)
+MEDIA_TYPES = (
+    frozenset(AUDIO_MIME_EXTENSIONS)
+    | {"application/ogg", "application/mp4"}
+    | GENERIC_BINARY_MEDIA_TYPES
+)
 PROGRESS_UPDATE_INTERVAL = 0.1
 logger = logging.getLogger(__name__)
 

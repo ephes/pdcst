@@ -3,7 +3,9 @@ import time
 from datetime import datetime, timezone
 
 import feedparser
+import httpx
 import pytest
+from typer.testing import CliRunner
 
 import pdcst
 from pdcst.repository import (
@@ -41,6 +43,56 @@ def fetch(monkeypatch, entries, channel_date=""):
 def test_optional_channel_updated(monkeypatch):
     podcast, episodes = fetch(monkeypatch, item())
     assert podcast.feed.updated == episodes[0].published == DATE
+
+
+def test_download_duplicate_titles_by_exact_guid(monkeypatch, tmp_path):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    chosen_url = "https://example.com/chosen.mp3"
+    fetch(
+        monkeypatch,
+        item(guid="episode-1")
+        + item(f'<enclosure url="{chosen_url}" type="audio/mpeg"/>', guid="episode-2"),
+    )
+    podcast = pdcst.subscribe("https://example.com/feed", "{index}.{file_format}", None)
+    calls = []
+
+    def transfer(url, stage, **kwargs):
+        calls.append(url)
+        stage.write_bytes(b"synthetic audio")
+
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    runner = CliRunner()
+    result = runner.invoke(pdcst.cli, ["episodes", "Podcast"])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["Episode", "Episode"]
+
+    result = runner.invoke(pdcst.cli, ["download", "Podcast", "Episode"])
+    assert result.exit_code == 2
+    assert "Ambiguous episode (2 matches)" in result.output
+    assert not calls
+
+    result = runner.invoke(pdcst.cli, ["episodes", "Podcast", "--show-guid"])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["Episode\tepisode-1", "Episode\tepisode-2"]
+
+    for args, message in [
+        (["--guid", "EPISODE-2"], "No matching episode"),
+        (["--guid", "episode-"], "No matching episode"),
+        (["Episode", "--guid", "episode-2"], "Supply an episode title or --guid"),
+        ([], "Supply an episode title or --guid"),
+    ]:
+        result = runner.invoke(pdcst.cli, ["download", "Podcast", *args])
+        assert result.exit_code == 2
+        assert message in result.output
+        assert not calls
+
+    result = runner.invoke(pdcst.cli, ["download", "Podcast", "--guid", "episode-2"])
+    assert result.exit_code == 0, result.output
+    assert calls == [chosen_url]
+    directory = tmp_path / podcast.directory
+    first, second = EpisodeRepository(directory).list()
+    assert first.audio_file is None
+    assert (directory / second.audio_file).read_bytes() == b"synthetic audio"
 
 
 def test_channel_updated_preferred(monkeypatch):
@@ -141,6 +193,79 @@ def test_untyped_audio_fallback(monkeypatch):
         monkeypatch, item('<enclosure url="https://example.com/a.mp3?download=1"/>')
     )
     assert episodes[0].audio_url == "https://example.com/a.mp3?download=1"
+
+
+@pytest.mark.parametrize(
+    "media_type", ["application/octet-stream", "binary/octet-stream"]
+)
+def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_type):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    feed_url = "https://example.com/feed"
+    audio_url = "https://example.com/A.MP3?download=1"
+    generic = f'<enclosure url="{audio_url}" type="{media_type}"/>'
+    typed_url = "https://example.com/preferred"
+    generic_guid = "https://example.com/generic"
+    entries = (
+        item(generic, guid=generic_guid)
+        + item(
+            generic + f'<enclosure url="{typed_url}" type="audio/ogg"/>',
+            guid="preferred",
+        )
+        + item(
+            f'<enclosure url="https://example.com/file.bin?name=a.mp3" type="{media_type}"/>',
+            guid="non-audio",
+        )
+        + item(
+            '<enclosure url="https://example.com/image.mp3" type="image/jpeg"/>',
+            guid="image",
+        )
+        + item(
+            '<enclosure url="https://example.com/video.mp3" type="video/mp4"/>',
+            guid="video",
+        )
+    )
+
+    def respond(request):
+        if str(request.url) == feed_url:
+            body = f"<rss><channel><title>Podcast</title>{entries}</channel></rss>"
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/rss+xml"},
+                stream=httpx.ByteStream(body.encode()),
+            )
+        assert str(request.url) == audio_url
+        return httpx.Response(
+            200,
+            headers={"Content-Type": media_type},
+            stream=httpx.ByteStream(b"synthetic audio"),
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
+    )
+
+    with pytest.warns(UserWarning, match="Skipped 3 unusable feed entry"):
+        podcast = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
+    directory = tmp_path / podcast.directory
+    repository = EpisodeRepository(directory)
+    fallback, preferred = repository.list()
+    assert (fallback.guid, fallback.audio_url, fallback.audio_media_type) == (
+        generic_guid,
+        audio_url,
+        None,
+    )
+    assert (preferred.guid, preferred.audio_url, preferred.audio_media_type) == (
+        typed_url,
+        typed_url,
+        "audio/ogg",
+    )
+
+    pdcst.download("Podcast", guid=generic_guid)
+    assert repository.list()[0].audio_file == "1.mp3"
+    assert (directory / "1.mp3").read_bytes() == b"synthetic audio"
 
 
 @pytest.mark.parametrize(

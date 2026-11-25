@@ -42,7 +42,7 @@ from pydantic import (
 )
 
 from .config import settings
-from .download import DownloadError
+from .download import GENERIC_BINARY_MEDIA_TYPES, DownloadError
 from .models import (
     AUDIO_MIME_EXTENSIONS,
     AUDIO_SUFFIXES,
@@ -2046,10 +2046,9 @@ class FeedParserRepository:
             media_type = enclosure.get("type", "").split(";", 1)[0].strip().lower()
             if media_type in cls.AUDIO_TYPES:
                 return href, media_type
-            if (
-                not media_type
-                and url.path.lower().rsplit(".", 1)[-1] in cls.AUDIO_SUFFIXES
-            ):
+            if media_type and media_type not in GENERIC_BINARY_MEDIA_TYPES:
+                continue
+            if url.path.lower().rsplit(".", 1)[-1] in cls.AUDIO_SUFFIXES:
                 fallback = fallback or (href, None)
         if fallback:
             return fallback
