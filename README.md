@@ -71,7 +71,9 @@ and query strings. Other explicit types are rejected even with an audio
 extension. Enclosure URLs containing whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
-episodes remain available. On first import they receive chronological indices
+episodes remain available in refreshes and previews even when Python treats
+warnings as errors. Feeds with no usable episodes still raise `FeedError`.
+On first import the usable episodes receive chronological indices
 (with GUID order breaking equal-date ties). The library's
 `FeedParserRepository.parse_feed_entries()` uses the same order and indices for
 its preview. Refresh retains every stored GUID and

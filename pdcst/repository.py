@@ -193,11 +193,11 @@ def clear_intent(path, *, directory_fd=None):
             os.close(directory_fd)
 
 
-def _warn_completed_operation(message):
+def _warn_completed_operation(message, *, category=RuntimeWarning):
     try:
-        warnings.warn(message, RuntimeWarning, stacklevel=3)
+        warnings.warn(message, category, stacklevel=3)
     except Exception:
-        # Warning filters and custom handlers can raise after publication.
+        # Warning filters and custom handlers can raise during diagnostics.
         pass
 
 
@@ -2061,10 +2061,12 @@ class FeedParserRepository:
     @classmethod
     def parse_feed_entries(cls, entries):
         """Return usable episode dictionaries ordered by episode time and GUID."""
-        return [
-            episode.dict(exclude={"audio_file"})
-            for episode in cls._parse_feed_entry_models(entries)
-        ]
+        episodes, skipped = cls._parse_feed_entry_models(entries)
+        if skipped:
+            _warn_completed_operation(
+                f"Skipped {skipped} unusable feed entry/entries", category=UserWarning
+            )
+        return [episode.dict(exclude={"audio_file"}) for episode in episodes]
 
     @classmethod
     def _parse_feed_entry_models(cls, entries):
@@ -2096,14 +2098,10 @@ class FeedParserRepository:
             raise FeedError(f"{error} (usable feed entries)") from None
         if not episodes:
             raise FeedError("Feed has no usable audio episodes")
-        if skipped:
-            warnings.warn(
-                f"Skipped {skipped} unusable feed entry/entries", stacklevel=3
-            )
         episodes.sort(key=lambda episode: (episode.published, episode.guid))
         for index, episode in enumerate(episodes, 1):
             episode.index = index
-        return episodes
+        return episodes, skipped
 
     def get(self, url, directory, episode_name_pattern):
         """Fetch a feed and bound its update date by the newest usable episode."""
@@ -2112,7 +2110,9 @@ class FeedParserRepository:
         if not isinstance(title, str) or not title.strip():
             raise FeedError("Feed is missing a title")
 
-        validated_episodes = self._parse_feed_entry_models(document.get("entries", []))
+        validated_episodes, skipped = self._parse_feed_entry_models(
+            document.get("entries", [])
+        )
         updated = validated_episodes[-1].published
         channel = document["feed"]
         # Read raw keys rather than feedparser's deprecated updated/pubDate alias.
@@ -2145,4 +2145,8 @@ class FeedParserRepository:
             for episode in validated_episodes
         ]
 
+        if skipped:
+            _warn_completed_operation(
+                f"Skipped {skipped} unusable feed entry/entries", category=UserWarning
+            )
         return podcast, episodes

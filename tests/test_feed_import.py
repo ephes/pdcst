@@ -1,5 +1,6 @@
 import os
 import time
+import warnings
 from datetime import datetime, timezone
 
 import feedparser
@@ -29,7 +30,7 @@ def item(
     )
 
 
-def fetch(monkeypatch, entries, channel_date=""):
+def mock_feed(monkeypatch, entries, channel_date=""):
     document = feedparser.parse(
         f'<rss version="2.0"><channel><title>Podcast</title>{channel_date}'
         f"{entries}</channel></rss>"
@@ -37,6 +38,11 @@ def fetch(monkeypatch, entries, channel_date=""):
     monkeypatch.setattr(
         FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
     )
+    return document
+
+
+def fetch(monkeypatch, entries, channel_date=""):
+    mock_feed(monkeypatch, entries, channel_date)
     return FeedParserRepository().get("https://example.com/feed", None, "{index}.mp3")
 
 
@@ -298,6 +304,48 @@ def test_invalid_entries_warn_and_preserve_siblings(monkeypatch, enclosures):
     assert podcast.episodes_count == 1
     assert episodes[0].guid == "valid"
     assert episodes[0].index == 1
+
+
+@pytest.mark.parametrize("warning_action", ["default", "error"])
+def test_refresh_preserves_usable_entries_under_warning_filters(
+    monkeypatch, tmp_path, warning_action
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    feed_url = "https://example.com/feed"
+    name_pattern = "{index}.{file_format}"
+    valid = item(guid="stored")
+    broken = item(enclosures="", guid="unusable")
+    mock_feed(monkeypatch, valid)
+    pdcst.subscribe(feed_url, name_pattern, None)
+
+    mock_feed(monkeypatch, item(guid="fresh") + broken + valid)
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter(warning_action)
+        refreshed = pdcst.subscribe(feed_url, name_pattern, None)
+    expected = [(UserWarning, "Skipped 1 unusable feed entry/entries")]
+    assert [(warn.category, str(warn.message)) for warn in recorded] == (
+        expected if warning_action == "default" else []
+    )
+    assert refreshed.episodes_count == 2
+    repo = EpisodeRepository(tmp_path / refreshed.directory)
+    assert [episode.guid for episode in repo.list()] == ["stored", "fresh"]
+
+    paths = [tmp_path / "podcasts.json", repo.base_dir / "episodes.json"]
+    snapshots = [path.read_bytes() for path in paths]
+    mock_feed(monkeypatch, broken)
+    with warnings.catch_warnings():
+        warnings.simplefilter(warning_action)
+        with pytest.raises(FeedError, match="Feed has no usable audio episodes"):
+            pdcst.subscribe(feed_url, name_pattern, None)
+    assert [path.read_bytes() for path in paths] == snapshots
+
+
+def test_feed_preview_keeps_usable_entries_when_warnings_are_errors(monkeypatch):
+    document = mock_feed(monkeypatch, item(enclosures="", guid="unusable") + item())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        preview = FeedParserRepository.parse_feed_entries(document.entries)
+    assert [(episode["guid"], episode["index"]) for episode in preview] == [("one", 1)]
 
 
 @pytest.mark.parametrize("include_valid_sibling", [True, False])
