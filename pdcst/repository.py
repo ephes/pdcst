@@ -1500,20 +1500,22 @@ class EpisodeRepository(JsonRepository):
                                 stacklevel=2,
                             )
                     else:
-                        try:
-                            self._unlink(backup)
-                            self._unlink(recovery)
-                            if podcast_backup is not None:
-                                podcasts_repo._unlink(podcast_backup)
-                        except OSError:
+                        backups = [(self, backup), (self, recovery)]
+                        if podcast_backup is not None:
+                            backups.append((podcasts_repo, podcast_backup))
+                        remaining = []
+                        for repo, path in backups:
+                            try:
+                                repo._unlink(path)
+                            except OSError:
+                                remaining.append(str(path))
+                        if remaining:
                             if pending_error:
                                 message = "Refresh recovery cleanup incomplete"
                             else:
                                 message = "Refresh completed; backup cleanup incomplete"
-                            warnings.warn(
-                                f"{message}; inspect {backup}, {recovery}, {podcast_backup}",
-                                RuntimeWarning,
-                                stacklevel=2,
+                            _warn_completed_operation(
+                                f"{message}; inspect " + ", ".join(remaining)
                             )
 
     name = "episodes.json"

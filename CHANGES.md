@@ -1,5 +1,8 @@
 # Unreleased
 
+* After retiring all refresh intents, attempt each backup removal independently
+  and report only paths whose removal failed.
+
 * Recheck the audio download deadline after syncing and closing the staging
   file, before publishing it.
 
