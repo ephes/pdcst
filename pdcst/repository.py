@@ -221,6 +221,23 @@ def _warn_completed_operation(message, *, category=RuntimeWarning):
         pass
 
 
+def _retain_recovery(failure, message):
+    """Attach recovery locations to a propagating failure, then warn best effort.
+
+    The failure stays the reported outcome: a raising warning filter or handler
+    can neither replace it nor discard the retained paths it names.
+    """
+    try:
+        if hasattr(failure, "add_note"):
+            failure.add_note(message)
+        else:
+            # Python 3.10: the attribute later versions render with tracebacks.
+            failure.__notes__ = [*getattr(failure, "__notes__", ()), message]
+    except Exception:
+        pass
+    _warn_completed_operation(message)
+
+
 @contextmanager
 def advisory_lock(path, *, directory_fd=None):
     """Admit a stable single-link inode under a monotonic wait budget."""
@@ -1167,13 +1184,13 @@ class EpisodeRepository(JsonRepository):
                         check_directory()
                         current.audio_file = name
                         self._write_models(locked)
-                    except PublicationDurabilityError:
+                    except PublicationDurabilityError as error:
                         # JSON is already visible: keep its matching audio and backup.
                         if backup is not None:
-                            warnings.warn(
-                                f"Publication durability uncertain; previous audio retained at {backup}",
-                                RuntimeWarning,
-                                stacklevel=2,
+                            _retain_recovery(
+                                error,
+                                "Publication durability uncertain; "
+                                f"previous audio retained at {backup}",
                             )
                         raise
                     except BaseException:
@@ -1234,12 +1251,11 @@ class EpisodeRepository(JsonRepository):
                         if previous_moved
                         else ""
                     )
-                    warnings.warn(
+                    _retain_recovery(
+                        error,
                         "Download rollback incomplete; "
                         f"completed audio retained at {recovery}{previous}; "
                         "move retained audio aside or restore it before retrying",
-                        RuntimeWarning,
-                        stacklevel=2,
                     )
                 elif completed and self._exists(stage):
                     recovery = f"completed audio retained at {stage}"
@@ -1253,7 +1269,7 @@ class EpisodeRepository(JsonRepository):
                         if not unchanged:
                             recovery = f"inspect changed audio stage at {stage}"
                         raise DownloadConflict(f"{error}; {recovery}") from error
-                    warnings.warn(recovery, RuntimeWarning, stacklevel=2)
+                    _retain_recovery(error, recovery)
                 raise
             finally:
                 if stage_descriptor is not None:
@@ -1406,6 +1422,7 @@ class EpisodeRepository(JsonRepository):
             retain = False
             imported = False
             completed = False
+            failure = None
             try:
                 if previous is not None:
                     self._write_refresh_backup(backup, previous)
@@ -1449,6 +1466,7 @@ class EpisodeRepository(JsonRepository):
                 yield
                 completed = True
             except BaseException as error:
+                failure = error
                 episodes_unsynced = isinstance(error, PublicationDurabilityError)
                 if episodes_unsynced:
                     if error.path != self.path:
@@ -1468,20 +1486,20 @@ class EpisodeRepository(JsonRepository):
                         self._sync()
                     except BaseException:
                         retain = True
-                        warnings.warn(
+                        _retain_recovery(
+                            error,
                             "Refresh rollback incomplete; "
                             f"previous metadata at {backup} or {self.path}; "
                             f"refreshed metadata at {self.path} or {recovery}; "
                             f"recovery intent at {marker}",
-                            RuntimeWarning,
-                            stacklevel=2,
                         )
                     else:
                         if episodes_unsynced:
-                            raise StoreWriteError(
+                            failure = StoreWriteError(
                                 f"Refresh of {self.path} could not be synced and "
                                 "was rolled back; previous episodes retained"
-                            ) from error
+                            )
+                            raise failure from error
                 raise
             finally:
                 if not retain:
@@ -1502,20 +1520,18 @@ class EpisodeRepository(JsonRepository):
                         if not pending_error:
                             if not isinstance(error, OSError):
                                 raise
-                            warnings.warn(
+                            # Published and synced: keep the committed outcome.
+                            _warn_completed_operation(
                                 "Refresh completed; recovery cleanup pending at "
                                 + ", ".join(str(path) for _, path in markers)
                                 + "; metadata backups retained; stop all pdcst "
                                 "commands and follow README interrupted-publication "
-                                "recovery; do not repeat refresh",
-                                RuntimeWarning,
-                                stacklevel=2,
+                                "recovery; do not repeat refresh"
                             )
                         else:
-                            warnings.warn(
+                            _retain_recovery(
+                                failure,
                                 f"Refresh recovery cleanup incomplete; inspect {marker}",
-                                RuntimeWarning,
-                                stacklevel=2,
                             )
                     else:
                         backups = [(self, backup), (self, recovery)]
@@ -1529,12 +1545,16 @@ class EpisodeRepository(JsonRepository):
                                 remaining.append(str(path))
                         if remaining:
                             if pending_error:
-                                message = "Refresh recovery cleanup incomplete"
+                                _retain_recovery(
+                                    failure,
+                                    "Refresh recovery cleanup incomplete; inspect "
+                                    + ", ".join(remaining),
+                                )
                             else:
-                                message = "Refresh completed; backup cleanup incomplete"
-                            _warn_completed_operation(
-                                f"{message}; inspect " + ", ".join(remaining)
-                            )
+                                _warn_completed_operation(
+                                    "Refresh completed; backup cleanup incomplete; "
+                                    "inspect " + ", ".join(remaining)
+                                )
 
     name = "episodes.json"
     storage_model_type = EpisodeInDb

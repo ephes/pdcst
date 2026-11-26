@@ -619,7 +619,10 @@ The warning reports the completed staging path; retrying the command is safe.
 Recovery files are retained for manual inspection and are not adopted on retry.
 If a rollback rename also fails, the initiating exception is preserved and a
 bounded warning reports the exact paths of the retained completed and previous
-audio. Restoration proceeds only when the destination has been safely vacated;
+audio. These download recovery diagnostics, including the retained staging
+path above, are also attached to the initiating exception as notes
+(`__notes__`), so a warning filter or handler that raises cannot replace the
+exception or drop the paths. Restoration proceeds only when the destination has been safely vacated;
 it never overwrites completed bytes after a failed move. The old JSON remains
 unchanged, but its audio may need manual restoration. Before retrying, move any
 completed audio still at the destination to a reserved `.pdcst-download-*` path,
@@ -640,14 +643,16 @@ Audio directory entries are synced before JSON publication; JSON replacement
 also syncs its parent before the previous audio backup may be retired. If JSON
 is visible but its directory sync fails, matching new audio and metadata stay
 together, the previous audio backup is retained, and the command reports uncertain
-durability. Inspect these files before retrying; this is not a rollback or a
+durability. The `PublicationDurabilityError` remains the reported error when a
+warning filter or handler raises; the backup path is attached to it as a note. Inspect these files before retrying; this is not a rollback or a
 crash-atomic transaction. A failure before JSON replacement restores prior audio.
 
 Once audio and JSON, or both refreshed metadata stores, have been published and
 synced, an intent-retirement unlink or directory-sync error is a **committed
 success with recovery cleanup pending**. The API returns the completed download
 path or refreshed podcast, and the CLI succeeds with a bounded warning naming
-the intent paths. Matching new data and remaining backups are kept; cleanup alone
+the intent paths. A refresh keeps this committed outcome when a warning filter
+or handler raises. Matching new data and remaining backups are kept; cleanup alone
 never triggers compensation. A marker may already be absent after a sync failure.
 Do not repeat the transfer or refresh. Stop all commands, inspect the named paths
 and retained generations, and follow Interrupted-publication recovery below to
@@ -730,6 +735,9 @@ rolled back the same way and reported as a failed write (`StoreWriteError`), not
 as a publication with uncertain durability. If restoration
 also fails, the original error is preserved and a warning names retained
 `.pdcst-refresh-*.previous` and `.refreshed` generations for manual recovery.
+The same locations, and any intent marker that a rolled-back refresh could not
+retire, are attached to the original error as notes (`__notes__`); a warning
+filter or handler that raises cannot replace that error.
 Do not remove these files before checking both repositories; restore the previous
 episode generation before retrying. Names beginning `.pdcst-refresh-` are reserved
 for recovery metadata and cannot be downloaded or retained as audio associations.
