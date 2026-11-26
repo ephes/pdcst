@@ -114,6 +114,56 @@ def test_add_reports_publication_when_receipt_fails(
     )
 
 
+RECEIPT_PROBE = """
+import sys
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+import pdcst
+from pdcst.models import Episode, Podcast
+from pdcst.repository import FeedParserRepository
+
+def feed(self, url, directory, pattern):
+    podcast = Podcast(feed={'url': url, 'updated': datetime.now(timezone.utc)},
+                      title='Synthetic Show', episodes_count=1,
+                      directory=directory, file_name_pattern=pattern)
+    episode = Episode(podcast=podcast, index=1, guid='synthetic',
+                      audio_url='https://example.invalid/audio.mp3',
+                      title='Synthetic Episode', published=datetime.now(timezone.utc))
+    return podcast, [episode]
+with patch.object(FeedParserRepository, 'get', feed):
+    pdcst.cli(['add', 'https://example.invalid/feed.xml'], prog_name='pdcst')
+"""
+
+
+def test_add_receipt_failure_on_real_stdout_exits_cleanly(tmp_path):
+    root = tmp_path / "pdcst"
+    sink = tmp_path / "stdout"
+    sink.touch()
+    env = dict(os.environ, PYTHONPATH=str(Path(pdcst.__file__).resolve().parent.parent))
+    env["PDCST_HOME"] = str(root)
+    # A read-only stdout descriptor makes the real receipt write fail (EBADF).
+    with sink.open("rb") as stdout:
+        process = subprocess.run(
+            [sys.executable, "-c", RECEIPT_PROBE],
+            cwd=tmp_path,
+            env=env,
+            stdout=stdout,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+        )
+
+    assert process.returncode == 1, process.stderr
+    assert process.stderr == (
+        "Subscription saved. Unable to write the confirmation. "
+        "Use pdcst podcasts to verify it.\n"
+    )
+    assert sink.read_bytes() == b""
+    (stored,) = PodcastRepository(root).list()
+    assert stored.feed.url == "https://example.invalid/feed.xml"
+
+
 @pytest.mark.parametrize(
     "args",
     [
