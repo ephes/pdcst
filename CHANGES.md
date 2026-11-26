@@ -1,5 +1,8 @@
 # Unreleased
 
+* Check the feed XML byte budget and deadline while counting ampersand repairs,
+  before building the repaired XML.
+
 * Import `application/mp4` enclosures with .m4a paths as an audio fallback,
   keeping explicitly typed audio preferred.
 

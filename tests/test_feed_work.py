@@ -1,9 +1,13 @@
 """Refuse expensive XML before feedparser builds an expanded document."""
 
+from unittest.mock import Mock
+
+import feedparser
 import httpx
 import pytest
 
 import pdcst
+from pdcst import repository
 from pdcst.repository import (
     EpisodeRepository,
     FeedError,
@@ -100,11 +104,32 @@ def test_preflight_exact_limits_and_namespaced_atom(monkeypatch, encoding):
         )
 
 
-def test_preflight_repaired_bytes_and_deadline(monkeypatch):
-    body = b"<rss>" + b"&" * 100 + b"</rss>"
-    monkeypatch.setattr(FeedParserRepository, "MAX_XML_BYTES", 300)
+def test_preflight_budgets_repair_before_expanding_xml(monkeypatch):
+    body = ("<rss>é &amp; &#38; &#x26; " + "&" * 100 + "</rss>").encode()
+    decoded_bytes = len(feedparser.encodings.convert_to_utf8({}, body, {}))
+    exact_limit = decoded_bytes + 4 * 100
+    pattern = Mock(wraps=repository._UNESCAPED_AMPERSAND)
+    monkeypatch.setattr(repository, "_UNESCAPED_AMPERSAND", pattern)
+    monkeypatch.setattr(FeedParserRepository, "MAX_XML_BYTES", exact_limit - 1)
     with pytest.raises(FeedError, match="XML repaired byte limit"):
         FeedParserRepository.preflight_xml(body, {}, lambda: None)
+    pattern.sub.assert_not_called()
+
+    monkeypatch.setattr(FeedParserRepository, "MAX_XML_BYTES", exact_limit)
+    FeedParserRepository.preflight_xml(body, {}, lambda: None)
+
+
+def test_preflight_checks_deadline_while_counting_repairs(monkeypatch):
+    body = b"<rss>" + b"&" * 512 + b"</rss>"
+    original = repository._UNESCAPED_AMPERSAND
+
+    def matches(text):
+        yield from original.finditer(text)
+        pytest.fail("Preflight finished counting after the deadline expired")
+
+    pattern = Mock(wraps=original)
+    pattern.finditer.side_effect = matches
+    monkeypatch.setattr(repository, "_UNESCAPED_AMPERSAND", pattern)
     calls = []
 
     def expired():
@@ -113,4 +138,5 @@ def test_preflight_repaired_bytes_and_deadline(monkeypatch):
             raise FeedError("Feed fetch exceeded time limit")
 
     with pytest.raises(FeedError, match="time limit"):
-        FeedParserRepository.preflight_xml(BODY, {}, expired)
+        FeedParserRepository.preflight_xml(body, {}, expired)
+    pattern.sub.assert_not_called()

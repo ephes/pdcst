@@ -173,8 +173,10 @@ Failed HTTP response bodies are not read for diagnostics.
 Before feedparser materializes entries, a streaming XML preflight admits at most
 64 levels of nesting, 100,000 elements, 10,000 RSS items/Atom entries, 50,000
 link/enclosure elements and 200,000 attributes/namespace declarations in total.
-Charset decoding and entity repair each have a 16 MiB UTF-8 ceiling. DOCTYPE declarations (including
-external DTDs) are refused before expansion or external access. The acquisition
+Charset decoding and entity repair each have a 16 MiB UTF-8 ceiling.
+Preflight counts ampersand repairs against the remaining byte budget and checks
+the acquisition deadline before building the repaired XML. DOCTYPE declarations
+(including external DTDs) are refused before expansion or external access. The acquisition
 deadline is also checked during preflight, after parsing and during enclosure
 traversal; parser calls are synchronous, bounded by these input/work limits.
 These fixed limits refuse the refresh before either metadata store changes.
