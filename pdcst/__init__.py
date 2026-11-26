@@ -3,7 +3,10 @@ pdcst is a little podcast command line utility to show
 new episodes and download audio files.
 """
 
+import errno
+import os
 import re
+import sys
 import unicodedata
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
@@ -351,7 +354,34 @@ def add(
     prefix, suffix = "Podcast ", " added"
     budget = _PODCAST_LINE_MAX_CHARS - len(prefix) - len(suffix)
     preview = _terminal_title_preview(podcast.title, budget)
-    print(f"{prefix}{preview}{suffix}")
+    try:
+        print(f"{prefix}{preview}{suffix}", flush=True)
+    except (OSError, ValueError) as error:
+        typer.echo(
+            "Subscription saved. Unable to write the confirmation. "
+            "Use pdcst podcasts to verify it.",
+            err=True,
+        )
+        if isinstance(error, OSError) and error.errno == errno.EPIPE:
+            # Let Typer suppress the broken pipe on the shutdown flush too.
+            raise
+        _discard_pending_stdout()
+        raise typer.Exit(1) from None
+
+
+def _discard_pending_stdout():
+    """Send unwritten stdout data to the null device at interpreter shutdown."""
+    try:
+        descriptor = sys.stdout.fileno()
+        null = os.open(os.devnull, os.O_WRONLY)
+    except (AttributeError, OSError, ValueError):
+        return
+    try:
+        os.dup2(null, descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(null)
 
 
 @cli.command(name="podcasts")

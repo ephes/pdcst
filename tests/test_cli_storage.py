@@ -1,11 +1,13 @@
 """Registered CLI failure boundaries using only synthetic stores and transfers."""
 
 import copy
+import errno
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from typer.testing import CliRunner
@@ -76,6 +78,90 @@ def test_fresh_home_add_creates_root(tmp_path):
     assert result["exit"] == 0, result
     assert (tmp_path / "pdcst/podcasts.json").is_file()
     assert (tmp_path / "pdcst/synthetic_show/episodes.json").is_file()
+
+
+@pytest.mark.parametrize("operation", ["write", "flush"])
+def test_add_reports_publication_when_receipt_fails(
+    tmp_path, monkeypatch, podcast, episode, operation
+):
+    feed_url = "https://example.invalid/feed.xml?token=PRIVATE"
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+
+    def feed(self, url, directory, pattern):
+        podcast.feed.url = url
+        podcast.file_name_pattern = pattern
+        return podcast, [episode]
+
+    monkeypatch.setattr(FeedParserRepository, "get", feed)
+    output = Mock()
+    error = OSError(errno.EPIPE if operation == "write" else errno.EIO, feed_url)
+    getattr(output, operation).side_effect = error
+
+    def print_receipt(message, **kwargs):
+        print(message, file=output, **kwargs)
+
+    monkeypatch.setattr(pdcst, "print", print_receipt, raising=False)
+    result = CliRunner().invoke(pdcst.cli, ["add", feed_url], color=False)
+
+    (stored,) = PodcastRepository(tmp_path).list()
+    assert stored.feed.url == feed_url
+    assert stored.episodes_count == 1
+    assert [item.guid for item in pdcst.list_all_episodes(stored)] == [episode.guid]
+    assert result.exit_code == 1
+    assert result.output == (
+        "Subscription saved. Unable to write the confirmation. "
+        "Use pdcst podcasts to verify it.\n"
+    )
+
+
+RECEIPT_PROBE = """
+import sys
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+import pdcst
+from pdcst.models import Episode, Podcast
+from pdcst.repository import FeedParserRepository
+
+def feed(self, url, directory, pattern):
+    podcast = Podcast(feed={'url': url, 'updated': datetime.now(timezone.utc)},
+                      title='Synthetic Show', episodes_count=1,
+                      directory=directory, file_name_pattern=pattern)
+    episode = Episode(podcast=podcast, index=1, guid='synthetic',
+                      audio_url='https://example.invalid/audio.mp3',
+                      title='Synthetic Episode', published=datetime.now(timezone.utc))
+    return podcast, [episode]
+with patch.object(FeedParserRepository, 'get', feed):
+    pdcst.cli(['add', 'https://example.invalid/feed.xml'], prog_name='pdcst')
+"""
+
+
+def test_add_receipt_failure_on_real_stdout_exits_cleanly(tmp_path):
+    root = tmp_path / "pdcst"
+    sink = tmp_path / "stdout"
+    sink.touch()
+    env = dict(os.environ, PYTHONPATH=str(Path(pdcst.__file__).resolve().parent.parent))
+    env["PDCST_HOME"] = str(root)
+    # A read-only stdout descriptor makes the real receipt write fail (EBADF).
+    with sink.open("rb") as stdout:
+        process = subprocess.run(
+            [sys.executable, "-c", RECEIPT_PROBE],
+            cwd=tmp_path,
+            env=env,
+            stdout=stdout,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+        )
+
+    assert process.returncode == 1, process.stderr
+    assert process.stderr == (
+        "Subscription saved. Unable to write the confirmation. "
+        "Use pdcst podcasts to verify it.\n"
+    )
+    assert sink.read_bytes() == b""
+    (stored,) = PodcastRepository(root).list()
+    assert stored.feed.url == "https://example.invalid/feed.xml"
 
 
 @pytest.mark.parametrize(

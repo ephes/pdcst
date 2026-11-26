@@ -50,6 +50,10 @@ To add a feed subscription call:
 $ pdcst add https://python-podcast.de/show/feed/podcast/mp3/rss.xml --name-pattern "gpp_{index:03}_{title}.{file_format}"
 ```
 
+If writing or flushing the confirmation fails after a successful save,
+`add` exits with a nonzero status and reports the saved subscription on stderr.
+Use `pdcst podcasts` to verify the subscription before retrying.
+
 Feeds must have a channel title and at least one usable audio episode (an ID,
 title, timestamp, and audio enclosure). An episode uses its publication date
 when valid and falls back to its own update date (such as Atom `updated`).
@@ -642,8 +646,10 @@ never triggers compensation. A marker may already be absent after a sync failure
 Do not repeat the transfer or refresh. Stop all commands, inspect the named paths
 and retained generations, and follow Interrupted-publication recovery below to
 verify the committed generation and retire remaining markers/backups. An unresolved
-remaining marker continues to fence later reads. Backup-only refresh cleanup
-failures also warn without converting the committed refresh into a failure.
+remaining marker continues to fence later reads. After all refresh markers
+retire, pdcst attempts to remove each backup independently. A best-effort warning
+names only the paths whose removal failed. The refresh or rollback outcome is
+preserved.
 
 Once audio and JSON have both been published and synced, failure to remove or
 sync the retirement of the previous backup is a cleanup warning: the download

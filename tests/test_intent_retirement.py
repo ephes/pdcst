@@ -11,10 +11,47 @@ from pdcst import repository
 from pdcst.repository import (
     AUDIO_INTENT,
     REFRESH_INTENT,
+    EpisodeRepository,
     PodcastRepository,
     StoreReadError,
     clear_intent,
 )
+
+
+def test_refresh_retires_other_backups_after_unlink_failure(
+    publication_store, monkeypatch
+):
+    home, episodes = publication_store
+    shows = PodcastRepository(home)
+    show = shows.list()[0]
+    incoming = episodes.list()
+    incoming[0].title = "Refreshed episode"
+    unlink = EpisodeRepository._unlink
+    retained = []
+
+    def fail_episode_backup_unlink(self, path):
+        if path.name.startswith(".pdcst-refresh-") and path.suffix == ".previous":
+            assert path.is_file()
+            retained.append(path)
+            raise OSError("PRIVATE_ERROR")
+        return unlink(self, path)
+
+    class Parser:
+        def get(self, *_):
+            return show, incoming
+
+    monkeypatch.setattr(EpisodeRepository, "_unlink", fail_episode_backup_unlink)
+    with pytest.warns(RuntimeWarning, match="Refresh completed") as warnings:
+        refreshed = pdcst.subscribe(show.feed.url, "saved.mp3", None, Parser(), shows)
+
+    (backup,) = retained
+    assert list(home.rglob(".pdcst-refresh-*")) == [backup]
+    assert not list(home.rglob(REFRESH_INTENT))
+    assert [str(warning.message) for warning in warnings] == [
+        f"Refresh completed; backup cleanup incomplete; inspect {backup}"
+    ]
+    assert shows.list()[0].episodes_count == refreshed.episodes_count == 1
+    assert episodes.list()[0].title == "Refreshed episode"
 
 
 @pytest.mark.parametrize("admitted", [False, True])
