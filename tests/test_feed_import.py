@@ -1,5 +1,6 @@
 import os
 import time
+import warnings
 from datetime import datetime, timezone
 
 import feedparser
@@ -29,7 +30,7 @@ def item(
     )
 
 
-def fetch(monkeypatch, entries, channel_date=""):
+def mock_feed(monkeypatch, entries, channel_date=""):
     document = feedparser.parse(
         f'<rss version="2.0"><channel><title>Podcast</title>{channel_date}'
         f"{entries}</channel></rss>"
@@ -37,6 +38,11 @@ def fetch(monkeypatch, entries, channel_date=""):
     monkeypatch.setattr(
         FeedParserRepository, "fetch_document", staticmethod(lambda url: document)
     )
+    return document
+
+
+def fetch(monkeypatch, entries, channel_date=""):
+    mock_feed(monkeypatch, entries, channel_date)
     return FeedParserRepository().get("https://example.com/feed", None, "{index}.mp3")
 
 
@@ -196,12 +202,20 @@ def test_untyped_audio_fallback(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "media_type", ["application/octet-stream", "binary/octet-stream"]
+    ("media_type", "suffix", "rejected_paths"),
+    [
+        ("application/octet-stream", "mp3", ("file.bin?name=a.mp3",)),
+        ("binary/octet-stream", "mp3", ("file.bin?name=a.mp3",)),
+        ("application/ogg", "oga", ("video.ogv", "download?name=a.oga", "audio.mp3")),
+        ("Application/Ogg; param=value", "ogg", ("video.ogx",)),
+    ],
 )
-def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_type):
+def test_suffix_based_enclosures_import_and_download(
+    monkeypatch, tmp_path, media_type, suffix, rejected_paths
+):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     feed_url = "https://example.com/feed"
-    audio_url = "https://example.com/A.MP3?download=1"
+    audio_url = f"https://example.com/A.{suffix.upper()}?download=1"
     generic = f'<enclosure url="{audio_url}" type="{media_type}"/>'
     typed_url = "https://example.com/preferred"
     generic_guid = "https://example.com/generic"
@@ -211,9 +225,12 @@ def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_typ
             generic + f'<enclosure url="{typed_url}" type="audio/ogg"/>',
             guid="preferred",
         )
-        + item(
-            f'<enclosure url="https://example.com/file.bin?name=a.mp3" type="{media_type}"/>',
-            guid="non-audio",
+        + "".join(
+            item(
+                f'<enclosure url="https://example.com/{path}" type="{media_type}"/>',
+                guid=f"non-audio-{index}",
+            )
+            for index, path in enumerate(rejected_paths)
         )
         + item(
             '<enclosure url="https://example.com/image.mp3" type="image/jpeg"/>',
@@ -247,7 +264,9 @@ def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_typ
         lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
     )
 
-    with pytest.warns(UserWarning, match="Skipped 3 unusable feed entry"):
+    with pytest.warns(
+        UserWarning, match=f"Skipped {len(rejected_paths) + 2} unusable feed entry"
+    ):
         podcast = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
     directory = tmp_path / podcast.directory
     repository = EpisodeRepository(directory)
@@ -264,8 +283,9 @@ def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_typ
     )
 
     pdcst.download("Podcast", guid=generic_guid)
-    assert repository.list()[0].audio_file == "1.mp3"
-    assert (directory / "1.mp3").read_bytes() == b"synthetic audio"
+    filename = f"1.{suffix}"
+    assert repository.list()[0].audio_file == filename
+    assert (directory / filename).read_bytes() == b"synthetic audio"
 
 
 @pytest.mark.parametrize(
@@ -284,6 +304,48 @@ def test_invalid_entries_warn_and_preserve_siblings(monkeypatch, enclosures):
     assert podcast.episodes_count == 1
     assert episodes[0].guid == "valid"
     assert episodes[0].index == 1
+
+
+@pytest.mark.parametrize("warning_action", ["default", "error"])
+def test_refresh_preserves_usable_entries_under_warning_filters(
+    monkeypatch, tmp_path, warning_action
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    feed_url = "https://example.com/feed"
+    name_pattern = "{index}.{file_format}"
+    valid = item(guid="stored")
+    broken = item(enclosures="", guid="unusable")
+    mock_feed(monkeypatch, valid)
+    pdcst.subscribe(feed_url, name_pattern, None)
+
+    mock_feed(monkeypatch, item(guid="fresh") + broken + valid)
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter(warning_action)
+        refreshed = pdcst.subscribe(feed_url, name_pattern, None)
+    expected = [(UserWarning, "Skipped 1 unusable feed entry/entries")]
+    assert [(warn.category, str(warn.message)) for warn in recorded] == (
+        expected if warning_action == "default" else []
+    )
+    assert refreshed.episodes_count == 2
+    repo = EpisodeRepository(tmp_path / refreshed.directory)
+    assert [episode.guid for episode in repo.list()] == ["stored", "fresh"]
+
+    paths = [tmp_path / "podcasts.json", repo.base_dir / "episodes.json"]
+    snapshots = [path.read_bytes() for path in paths]
+    mock_feed(monkeypatch, broken)
+    with warnings.catch_warnings():
+        warnings.simplefilter(warning_action)
+        with pytest.raises(FeedError, match="Feed has no usable audio episodes"):
+            pdcst.subscribe(feed_url, name_pattern, None)
+    assert [path.read_bytes() for path in paths] == snapshots
+
+
+def test_feed_preview_keeps_usable_entries_when_warnings_are_errors(monkeypatch):
+    document = mock_feed(monkeypatch, item(enclosures="", guid="unusable") + item())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        preview = FeedParserRepository.parse_feed_entries(document.entries)
+    assert [(episode["guid"], episode["index"]) for episode in preview] == [("one", 1)]
 
 
 @pytest.mark.parametrize("include_valid_sibling", [True, False])

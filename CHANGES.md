@@ -1,5 +1,11 @@
 # Unreleased
 
+* Preserve usable feed episodes during refresh and preview when Python promotes
+  the skipped-entry warning to an error.
+
+* Import `application/ogg` enclosures with .ogg or .oga paths as an audio
+  fallback, keeping explicitly typed audio preferred.
+
 * Import enclosures declared as generic binary when their URL path has a known
   audio suffix. Prefer enclosures with a supported audio media type.
 
