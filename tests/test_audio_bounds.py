@@ -2,6 +2,7 @@ import importlib
 import os
 from contextlib import contextmanager
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -11,6 +12,50 @@ from pydantic import ValidationError
 import pdcst
 from pdcst.config import Settings
 from pdcst.repository import EpisodeRepository, PodcastRepository
+
+
+def test_short_stage_write_preserves_audio_and_metadata(
+    tmp_path, monkeypatch, podcast, episode
+):
+    module = importlib.import_module("pdcst.download")
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    PodcastRepository(tmp_path).add(podcast)
+    repo = EpisodeRepository(tmp_path / podcast.directory)
+    episode.audio_file = podcast.get_audio_file_name(episode)
+    repo.add(episode)
+    before = repo.path.read_bytes()
+    target = repo.base_dir / episode.audio_file
+    target.write_bytes(b"old audio")
+
+    replacement_file = module.replacement_file
+
+    @contextmanager
+    def short_replacement(*args, **kwargs):
+        with replacement_file(*args, **kwargs) as output:
+            writer = Mock(wraps=output)
+            writer.write.side_effect = lambda chunk: output.write(chunk[:1])
+            yield writer
+
+    def respond(request):
+        return httpx.Response(
+            200, stream=httpx.ByteStream(b"audio"), headers={"Content-Length": "5"}
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
+    )
+    monkeypatch.setattr(module, "replacement_file", short_replacement)
+
+    with pytest.raises(typer.BadParameter, match="Incomplete audio stage write"):
+        pdcst.download(podcast.title, episode.title)
+
+    assert target.read_bytes() == b"old audio"
+    assert repo.path.read_bytes() == before
+    assert not list(repo.base_dir.glob("*.tmp"))
+    assert not list(repo.base_dir.glob(".pdcst-download-*"))
 
 
 def test_fragmented_audio_coalesces_progress(tmp_path, monkeypatch):

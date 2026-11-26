@@ -481,12 +481,14 @@ elapsed limit (`PDCST_AUDIO_MAX_SECONDS`). Both must be positive; the duration
 must be finite. Larger episodes can use higher limits. Declared lengths over the
 byte limit are rejected before creating output. The elapsed deadline is checked
 after staging opens and again after progress setup, before reading the body.
-Each raw chunk is checked before writing, and elapsed time is checked again
-before publication. HTTP operations
-time out after at most 10 seconds (or the remaining elapsed budget if smaller), so a
-blocked operation may finish its timeout before the elapsed limit is checked.
+Each raw chunk is checked before writing and counts toward the transfer total
+only once the staging file accepts the full chunk. A short write fails the
+transfer. The deadline is checked again after the staging file is flushed,
+synced and closed, before its rename. HTTP operations time out after at most
+10 seconds (or the remaining elapsed budget if smaller), so a blocked operation
+may finish its timeout before the elapsed limit is checked.
 The transfer helper `download_with_progress` raises `DownloadError` (a `ValueError`)
-for HTTP, transport and budget failures. Import these with
+for HTTP, transport, budget and short-write failures. Import these with
 `from pdcst.download import DownloadError, download_with_progress`; the exception
 is also available as `pdcst.DownloadError`. The command function
 `pdcst.download(podcast, episode)` converts expected failures to `typer.BadParameter`,
