@@ -1184,13 +1184,13 @@ class EpisodeRepository(JsonRepository):
                         check_directory()
                         current.audio_file = name
                         self._write_models(locked)
-                    except PublicationDurabilityError:
+                    except PublicationDurabilityError as error:
                         # JSON is already visible: keep its matching audio and backup.
                         if backup is not None:
-                            warnings.warn(
-                                f"Publication durability uncertain; previous audio retained at {backup}",
-                                RuntimeWarning,
-                                stacklevel=2,
+                            _retain_recovery(
+                                error,
+                                "Publication durability uncertain; "
+                                f"previous audio retained at {backup}",
                             )
                         raise
                     except BaseException:
@@ -1251,12 +1251,11 @@ class EpisodeRepository(JsonRepository):
                         if previous_moved
                         else ""
                     )
-                    warnings.warn(
+                    _retain_recovery(
+                        error,
                         "Download rollback incomplete; "
                         f"completed audio retained at {recovery}{previous}; "
                         "move retained audio aside or restore it before retrying",
-                        RuntimeWarning,
-                        stacklevel=2,
                     )
                 elif completed and self._exists(stage):
                     recovery = f"completed audio retained at {stage}"
@@ -1270,7 +1269,7 @@ class EpisodeRepository(JsonRepository):
                         if not unchanged:
                             recovery = f"inspect changed audio stage at {stage}"
                         raise DownloadConflict(f"{error}; {recovery}") from error
-                    warnings.warn(recovery, RuntimeWarning, stacklevel=2)
+                    _retain_recovery(error, recovery)
                 raise
             finally:
                 if stage_descriptor is not None:

@@ -619,7 +619,10 @@ The warning reports the completed staging path; retrying the command is safe.
 Recovery files are retained for manual inspection and are not adopted on retry.
 If a rollback rename also fails, the initiating exception is preserved and a
 bounded warning reports the exact paths of the retained completed and previous
-audio. Restoration proceeds only when the destination has been safely vacated;
+audio. These download recovery diagnostics, including the retained staging
+path above, are also attached to the initiating exception as notes
+(`__notes__`), so a warning filter or handler that raises cannot replace the
+exception or drop the paths. Restoration proceeds only when the destination has been safely vacated;
 it never overwrites completed bytes after a failed move. The old JSON remains
 unchanged, but its audio may need manual restoration. Before retrying, move any
 completed audio still at the destination to a reserved `.pdcst-download-*` path,
@@ -640,7 +643,8 @@ Audio directory entries are synced before JSON publication; JSON replacement
 also syncs its parent before the previous audio backup may be retired. If JSON
 is visible but its directory sync fails, matching new audio and metadata stay
 together, the previous audio backup is retained, and the command reports uncertain
-durability. Inspect these files before retrying; this is not a rollback or a
+durability. The `PublicationDurabilityError` remains the reported error when a
+warning filter or handler raises; the backup path is attached to it as a note. Inspect these files before retrying; this is not a rollback or a
 crash-atomic transaction. A failure before JSON replacement restores prior audio.
 
 Once audio and JSON, or both refreshed metadata stores, have been published and

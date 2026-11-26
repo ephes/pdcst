@@ -4,6 +4,10 @@
   error, when a recovery warning filter or handler raises. Recovery locations
   of a failed refresh are attached to its error as notes.
 
+* Keep `PublicationDurabilityError` and other download failures as the reported
+  error when a recovery warning raises, with the retained audio paths attached
+  to the error as notes.
+
 * Publish refreshed metadata and clear invalid audio references even when the
   retained-audio size warning raises.
 
