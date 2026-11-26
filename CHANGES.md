@@ -1,5 +1,8 @@
 # Unreleased
 
+* Recheck the audio download deadline after syncing and closing the staging
+  file, before publishing it.
+
 * Reject short writes to audio staging files and preserve previous audio and
   metadata.
 

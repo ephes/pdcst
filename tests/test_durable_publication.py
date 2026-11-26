@@ -306,6 +306,38 @@ def _serve(monkeypatch, content):
     )
 
 
+@pytest.mark.parametrize("use_descriptor", [False, True], ids=["path", "descriptor"])
+def test_download_rechecks_deadline_after_stage_sync(
+    tmp_path, monkeypatch, request, use_descriptor
+):
+    module = importlib.import_module("pdcst.download")
+    target = tmp_path / "saved.mp3"
+    target.write_bytes(b"previous audio")
+    _serve(monkeypatch, lambda: iter([b"completed audio"]))
+    now = 0
+    monkeypatch.setattr(module, "monotonic", lambda: now)
+    monkeypatch.setattr(module.settings, "audio_max_seconds", 5)
+    fsync = os.fsync
+
+    def slow_stage_sync(fd):
+        nonlocal now
+        fsync(fd)
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            now = 5
+
+    monkeypatch.setattr(os, "fsync", slow_stage_sync)
+    directory_fd = None
+    if use_descriptor:
+        directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+        request.addfinalizer(lambda: os.close(directory_fd))
+    with pytest.raises(DownloadError, match="Audio download duration limit exceeded"):
+        download_with_progress(
+            "https://example.invalid/audio", target, directory_fd=directory_fd
+        )
+    assert target.read_bytes() == b"previous audio"
+    assert list(tmp_path.iterdir()) == [target]
+
+
 @pytest.mark.skipif(
     not (getattr(os, "O_PATH", 0) or getattr(os, "O_SEARCH", 0)),
     reason="platform has no search-only directory descriptors",

@@ -186,7 +186,7 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                         raise DownloadError("Audio download byte limit exceeded")
                     total = int(digits)
                 with ExitStack() as files:
-                    before_replace = None
+                    before_replace = check_deadline
                     if directory_fd is None:
                         parent = target_path.parent
                         # Keep pathname mkdir semantics for relative paths and
@@ -199,14 +199,15 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                             )
                         )
 
-                        def check_destination():
+                        def check_destination_and_deadline():
                             check()
                             if _resolve_destination(parent) != resolved:
                                 raise DirectoryAdmissionError(
                                     "Audio destination directory identity changed"
                                 )
+                            check_deadline()
 
-                        before_replace = check_destination
+                        before_replace = check_destination_and_deadline
 
                     output = files.enter_context(
                         replacement_file(
