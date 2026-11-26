@@ -130,6 +130,40 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
     assert set(tmp_path.iterdir()) == {target, sentinel}
 
 
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("replacement", ["file", "symlink"])
+def test_replacement_refuses_exchanged_stage(tmp_path, relative, replacement):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    moved = tmp_path / "completed-stage"
+
+    def exchange_stage():
+        (stage,) = tmp_path.glob(".*.tmp")
+        stage.rename(moved)
+        if replacement == "symlink":
+            stage.symlink_to(moved.name)
+        else:
+            stage.write_bytes(b"unrelated")
+
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if relative else None
+    destination = tmp_path / "unused" / target.name if relative else target
+    try:
+        with pytest.raises(OSError, match="Replacement staging file identity changed"):
+            with storage.replacement_file(
+                destination,
+                binary=True,
+                directory_fd=directory_fd,
+                before_replace=exchange_stage,
+            ) as output:
+                output.write(b"new audio")
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    assert target.read_bytes() == b"original"
+    assert moved.read_bytes() == b"new audio"
+
+
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize(
     "failure",
@@ -244,6 +278,43 @@ def test_failure_preserves_target_and_closes_descriptor(
         pytest.fail("temporary descriptor leaked")
 
 
+def test_unidentified_stage_is_left_in_place_when_fstat_fails(tmp_path, monkeypatch):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    opened = []
+    original_open = storage.os.open
+    original_fstat = storage.os.fstat
+
+    def open_file(*args, **kwargs):
+        descriptor = original_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def fstat(fd):
+        if opened and fd == opened[0]:
+            raise OSError(errno.EIO, "synthetic fstat")
+        return original_fstat(fd)
+
+    monkeypatch.setattr(storage.os, "open", open_file)
+    monkeypatch.setattr(storage.os, "fstat", fstat)
+    with pytest.raises(OSError, match="synthetic fstat"):
+        with storage.replacement_file(target, binary=True):
+            pytest.fail("fstat failure should happen before yielding")
+    monkeypatch.undo()
+
+    assert target.read_bytes() == b"original"
+    (stage,) = tmp_path.glob(".*.tmp")
+    assert stage.read_bytes() == b""
+    assert len(opened) == 1
+    try:
+        os.fstat(opened[0])
+    except OSError as error:
+        assert error.errno == errno.EBADF
+    else:
+        os.close(opened[0])
+        pytest.fail("temporary descriptor leaked")
+
+
 def test_exclusive_open_failure_does_not_remove_existing_temp(tmp_path, monkeypatch):
     target = tmp_path / "saved"
     target.write_bytes(b"original")
@@ -255,6 +326,72 @@ def test_exclusive_open_failure_does_not_remove_existing_temp(tmp_path, monkeypa
             pytest.fail("exclusive open should fail before yielding")
     assert occupied.read_bytes() == b"belongs to someone else"
     assert target.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("exchanged", [False, True])
+def test_failed_replacement_only_retires_owned_stage(tmp_path, relative, exchanged):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    moved = tmp_path / "moved-stage"
+    primary = OSError(errno.EIO, "synthetic publication failure")
+
+    def fail_publication():
+        (stage,) = tmp_path.glob(".*.tmp")
+        if exchanged:
+            stage.rename(moved)
+            stage.write_bytes(b"unrelated")
+        raise primary
+
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if relative else None
+    destination = tmp_path / "unused" / target.name if relative else target
+    try:
+        with pytest.raises(OSError) as raised:
+            with storage.replacement_file(
+                destination,
+                binary=True,
+                directory_fd=directory_fd,
+                before_replace=fail_publication,
+            ) as output:
+                output.write(b"new audio")
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    assert raised.value is primary
+    assert target.read_bytes() == b"original"
+    if exchanged:
+        (stage,) = tmp_path.glob(".*.tmp")
+        assert stage.read_bytes() == b"unrelated"
+        assert moved.read_bytes() == b"new audio"
+    else:
+        assert set(tmp_path.iterdir()) == {target}
+
+
+def test_failed_replacement_preserves_primary_if_stage_stat_fails(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    primary = OSError(errno.EIO, "synthetic publication failure")
+    original_lstat = Path.lstat
+
+    def fail_stage_stat(path):
+        if path.suffix == ".tmp":
+            raise PermissionError("synthetic staging inspection failure")
+        return original_lstat(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "lstat", fail_stage_stat)
+        with pytest.raises(OSError) as raised:
+            with storage.replacement_file(target, binary=True) as output:
+                output.write(b"new audio")
+                raise primary
+
+    assert raised.value is primary
+    assert target.read_bytes() == b"original"
+    (stage,) = tmp_path.glob(".*.tmp")
+    assert stage.read_bytes() == b"new audio"
 
 
 @pytest.mark.parametrize("relative", [False, True])

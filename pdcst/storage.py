@@ -42,18 +42,30 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
     def local(path):
         return path.name if directory_fd is not None else path
 
+    def named_info(path):
+        if directory_fd is None:
+            return path.lstat()
+        return os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+
+    def owns_stage():
+        return stage_info is not None and os.path.samestat(
+            stage_info, named_info(temporary)
+        )
+
     descriptor = os.open(
         local(temporary),
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o666,
         **({"dir_fd": directory_fd} if directory_fd is not None else {}),
     )
+    stage_info = None
     try:
         # Keep descriptor ownership here even if stream construction fails midway.
         try:
             # Capture umask-filtered new-file permissions while the file is empty;
             # never expose payload through the staging name while writing it.
-            creation_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            stage_info = os.fstat(descriptor)
+            creation_mode = stat.S_IMODE(stage_info.st_mode)
             os.fchmod(descriptor, 0o600)
             with os.fdopen(
                 descriptor,
@@ -64,13 +76,7 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
                 yield output
                 output.flush()
                 try:
-                    info = (
-                        target.lstat()
-                        if directory_fd is None
-                        else os.stat(
-                            target.name, dir_fd=directory_fd, follow_symlinks=False
-                        )
-                    )
+                    info = named_info(target)
                 except FileNotFoundError:
                     mode = creation_mode
                 else:
@@ -91,6 +97,8 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
             os.close(descriptor)
         if before_replace is not None:
             before_replace()
+        if not owns_stage():
+            raise OSError("Replacement staging file identity changed")
         if directory_fd is None:
             os.replace(temporary, target)
         else:
@@ -101,12 +109,12 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
                 dst_dir_fd=directory_fd,
             )
     except BaseException:
-        # Only failures before replacement can leave the owned staging name.
         try:
-            if directory_fd is None:
-                temporary.unlink()
-            else:
-                os.unlink(temporary.name, dir_fd=directory_fd)
+            if owns_stage():
+                if directory_fd is None:
+                    temporary.unlink()
+                else:
+                    os.unlink(temporary.name, dir_fd=directory_fd)
         except OSError:
             pass  # Preserve the original publication failure.
         raise
