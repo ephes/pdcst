@@ -208,6 +208,11 @@ def test_untyped_audio_fallback(monkeypatch):
         ("binary/octet-stream", "mp3", ("file.bin?name=a.mp3",)),
         ("application/ogg", "oga", ("video.ogv", "download?name=a.oga", "audio.mp3")),
         ("Application/Ogg; param=value", "ogg", ("video.ogx",)),
+        (
+            "application/mp4",
+            "m4a",
+            ("video.mp4", "audio.mp3", "download?name=a.m4a"),
+        ),
     ],
 )
 def test_suffix_based_enclosures_import_and_download(
@@ -222,7 +227,7 @@ def test_suffix_based_enclosures_import_and_download(
     entries = (
         item(generic, guid=generic_guid)
         + item(
-            generic + f'<enclosure url="{typed_url}" type="audio/ogg"/>',
+            generic + f'<enclosure url="{typed_url}" type="audio/mp4"/>',
             guid="preferred",
         )
         + "".join(
@@ -270,7 +275,7 @@ def test_suffix_based_enclosures_import_and_download(
         podcast = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
     directory = tmp_path / podcast.directory
     repository = EpisodeRepository(directory)
-    fallback, preferred = repository.list()
+    fallback, preferred = repository.list({"podcast": podcast})
     assert (fallback.guid, fallback.audio_url, fallback.audio_media_type) == (
         generic_guid,
         audio_url,
@@ -279,8 +284,10 @@ def test_suffix_based_enclosures_import_and_download(
     assert (preferred.guid, preferred.audio_url, preferred.audio_media_type) == (
         typed_url,
         typed_url,
-        "audio/ogg",
+        "audio/mp4",
     )
+    assert fallback.audio_file_name == f"1.{suffix}"
+    assert preferred.audio_file_name == "2.m4a"
 
     pdcst.download("Podcast", guid=generic_guid)
     filename = f"1.{suffix}"

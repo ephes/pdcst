@@ -58,8 +58,13 @@ def effective_audio_format(audio_url: str, media_type: str | None) -> str | None
 
 
 def audio_format_changed(previous: str | None, current: str | None) -> bool:
-    """Require two known formats to confirm a change."""
-    return previous is not None and current is not None and previous != current
+    """Require two distinct known container formats to confirm a change."""
+    return (
+        previous is not None
+        and current is not None
+        and previous != current
+        and {previous, current} != {"oga", "ogg"}
+    )
 
 
 class FilenamePatternError(ValueError):

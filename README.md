@@ -70,9 +70,10 @@ audio/opus, audio/wav, audio/x-wav, audio/flac, or audio/x-flac. If none matches
 import uses the first suffix-qualified enclosure. Enclosures with no media type,
 `application/octet-stream` or `binary/octet-stream` qualify when the URL path
 ends in .mp3, .m4a, .aac, .ogg, .oga, .opus, .wav, or .flac. Enclosures declared
-as `application/ogg` qualify only with .ogg or .oga. Suffix matching ignores case
-and query strings. Other explicit types are rejected even with an audio
-extension. Enclosure URLs containing whitespace are rejected.
+as `application/ogg` qualify only with .ogg or .oga, and `application/mp4`
+qualifies only with .m4a. Suffix matching ignores case and query strings. Other
+explicit types are rejected even with an audio extension. Enclosure URLs
+containing whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available in refreshes and previews even when Python treats
@@ -97,9 +98,10 @@ WAV/x-wav → `wav`, FLAC/x-flac → `flac` (all types have the `audio/` prefix)
 Thus an `audio/mpeg` enclosure at `/download` becomes an `.mp3` file. Old records
 without the field remain readable and retain their former filename fallback.
 Refreshing the feed populates the field when the enclosure declares a supported
-type. A recognized URL suffix takes precedence when comparing formats. MIME
-aliases for the same format and legacy records with an unknown format can retain
-their download associations.
+type. A recognized URL suffix takes precedence when comparing formats. The
+`.oga` and `.ogg` suffixes identify the same Ogg format and each is used as
+written (in lowercase) for generated filenames. MIME aliases for the same format
+and legacy records with an unknown format can retain their download associations.
 
 Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
@@ -130,7 +132,8 @@ following symlinks. It clears associations to missing or nonregular files,
 repository/recovery names, and files with ambiguous ownership, including
 case/Unicode-equivalent names and aliases to the same file. Episodes in the
 current feed also lose their association if the enclosure URL changed or its
-effective format changed between two known formats.
+effective format changed between two known formats. A URL change limited to
+swapping `.oga` and `.ogg` retains the association and its stored filename.
 Historical episodes keep their feed metadata and usable audio references.
 Refresh also clears references to empty files and files over
 `PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
