@@ -292,6 +292,72 @@ def test_exclusive_open_failure_does_not_remove_existing_temp(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("exchanged", [False, True])
+def test_failed_replacement_only_retires_owned_stage(tmp_path, relative, exchanged):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    moved = tmp_path / "moved-stage"
+    primary = OSError(errno.EIO, "synthetic publication failure")
+
+    def fail_publication():
+        (stage,) = tmp_path.glob(".*.tmp")
+        if exchanged:
+            stage.rename(moved)
+            stage.write_bytes(b"unrelated")
+        raise primary
+
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if relative else None
+    destination = tmp_path / "unused" / target.name if relative else target
+    try:
+        with pytest.raises(OSError) as raised:
+            with storage.replacement_file(
+                destination,
+                binary=True,
+                directory_fd=directory_fd,
+                before_replace=fail_publication,
+            ) as output:
+                output.write(b"new audio")
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    assert raised.value is primary
+    assert target.read_bytes() == b"original"
+    if exchanged:
+        (stage,) = tmp_path.glob(".*.tmp")
+        assert stage.read_bytes() == b"unrelated"
+        assert moved.read_bytes() == b"new audio"
+    else:
+        assert set(tmp_path.iterdir()) == {target}
+
+
+def test_failed_replacement_preserves_primary_if_stage_stat_fails(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    primary = OSError(errno.EIO, "synthetic publication failure")
+    original_lstat = Path.lstat
+
+    def fail_stage_stat(path):
+        if path.suffix == ".tmp":
+            raise PermissionError("synthetic staging inspection failure")
+        return original_lstat(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "lstat", fail_stage_stat)
+        with pytest.raises(OSError) as raised:
+            with storage.replacement_file(target, binary=True) as output:
+                output.write(b"new audio")
+                raise primary
+
+    assert raised.value is primary
+    assert target.read_bytes() == b"original"
+    (stage,) = tmp_path.glob(".*.tmp")
+    assert stage.read_bytes() == b"new audio"
+
+
+@pytest.mark.parametrize("relative", [False, True])
 @pytest.mark.parametrize("outcome", ["body failure", "sync failure", "success"])
 def test_stage_cleanup_preserves_publication_result(
     tmp_path, monkeypatch, relative, outcome

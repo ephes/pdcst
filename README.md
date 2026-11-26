@@ -526,12 +526,15 @@ before publication. New files use 0666 filtered by the process umask.
 Files are flushed into a sibling temporary file and atomically replaced after
 completion. Immediately before replacement, the helper checks the temporary
 entry against the file it opened, without following symlinks. If the entry is
-missing or refers to another file, the destination stays as it was. The helper
-captures the empty file's umask-filtered creation mode and restricts it to 0600
-before writing any payload. After writing and flushing, the destination's existing mode
-(or the captured new-file mode) is restored for publication. The helper never
-changes the process umask. The containing directory is then synced
-before success. Failures before replacement retain the previous file and do not
+missing or refers to another file, the destination stays as it was. On failure,
+cleanup removes the temporary entry only if it still names the opened file.
+If cleanup cannot inspect the entry, it leaves it in place and reports the
+original failure. The helper captures the empty file's umask-filtered creation
+mode and restricts it to 0600 before writing any payload. After writing and
+flushing, the destination's existing mode (or the captured new-file mode) is
+restored for publication. The helper never changes the process umask. The
+containing directory is then synced before success. Failures before replacement
+retain the previous file and do not
 mark an episode downloaded. Filesystem errors propagate to the caller.
 The replacement helper closes its descriptor even if opening the stream fails;
 flush, permission-copy, file-sync, close or rename failures preserve the

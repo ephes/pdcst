@@ -47,12 +47,18 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
             return path.lstat()
         return os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
 
+    def owns_stage():
+        return stage_info is not None and os.path.samestat(
+            stage_info, named_info(temporary)
+        )
+
     descriptor = os.open(
         local(temporary),
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o666,
         **({"dir_fd": directory_fd} if directory_fd is not None else {}),
     )
+    stage_info = None
     try:
         # Keep descriptor ownership here even if stream construction fails midway.
         try:
@@ -91,8 +97,7 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
             os.close(descriptor)
         if before_replace is not None:
             before_replace()
-        named = named_info(temporary)
-        if (named.st_dev, named.st_ino) != (stage_info.st_dev, stage_info.st_ino):
+        if not owns_stage():
             raise OSError("Replacement staging file identity changed")
         if directory_fd is None:
             os.replace(temporary, target)
@@ -104,12 +109,12 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
                 dst_dir_fd=directory_fd,
             )
     except BaseException:
-        # Only failures before replacement can leave the owned staging name.
         try:
-            if directory_fd is None:
-                temporary.unlink()
-            else:
-                os.unlink(temporary.name, dir_fd=directory_fd)
+            if owns_stage():
+                if directory_fd is None:
+                    temporary.unlink()
+                else:
+                    os.unlink(temporary.name, dir_fd=directory_fd)
         except OSError:
             pass  # Preserve the original publication failure.
         raise
