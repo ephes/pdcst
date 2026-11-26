@@ -719,6 +719,32 @@ def test_refresh_clears_empty_and_oversized_audio(
         assert (episodes.base_dir / row.audio_file).read_bytes() == payloads[row.guid]
 
 
+@pytest.mark.filterwarnings("error")
+def test_refresh_publishes_when_retained_audio_size_warning_raises(
+    publication_store, monkeypatch, podcast, episode
+):
+    root, episodes = publication_store
+    monkeypatch.setattr(pdcst.settings, "root", root)
+    monkeypatch.setattr(pdcst.settings, "audio_max_bytes", 4)
+    shows = PodcastRepository(root)
+    saved = episodes.base_dir / episode.audio_file
+    fresh = copy.copy(episode)
+    fresh.title = "Updated episode"
+    fresh.audio_file = None
+
+    class Parser:
+        def get(self, *_):
+            return podcast, [fresh]
+
+    result = pdcst.subscribe(podcast.feed.url, "{index}.mp3", None, Parser(), shows)
+
+    assert result.episodes_count == 1
+    updated = episodes.all[episode.guid]
+    assert updated.title == "Updated episode"
+    assert updated.audio_file is None
+    assert saved.read_bytes() == b"previous audio"
+
+
 @pytest.mark.parametrize("failure", [PermissionError, OSError])
 def test_refresh_aborts_on_indeterminate_retained_audio_stat(
     tmp_path, monkeypatch, podcast, episode, failure

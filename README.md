@@ -137,7 +137,8 @@ swapping `.oga` and `.ogg` retains the association and its stored filename.
 Historical episodes keep their feed metadata and usable audio references.
 Refresh also clears references to empty files and files over
 `PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
-references. Files exactly at the limit remain eligible.
+references. The refresh still publishes if a warning filter or handler raises.
+Files exactly at the limit remain eligible.
 A permission or I/O error while checking a retained file aborts the refresh
 before either metadata store changes; a stored name that cannot exist (too long
 or an invalid byte sequence for the filesystem) counts as missing. Refresh leaves all physical audio entries

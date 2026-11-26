@@ -1,5 +1,8 @@
 # Unreleased
 
+* Publish refreshed metadata and clear invalid audio references even when the
+  retained-audio size warning raises.
+
 * Check the feed XML byte budget and deadline while counting ampersand repairs,
   before building the repaired XML.
 

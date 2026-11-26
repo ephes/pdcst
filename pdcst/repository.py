@@ -1311,11 +1311,9 @@ class EpisodeRepository(JsonRepository):
             else:
                 refused_size += 1
         if refused_size:
-            warnings.warn(
+            _warn_completed_operation(
                 f"Ignoring {refused_size} retained audio references to empty files "
                 "or files over the audio byte limit",
-                RuntimeWarning,
-                stacklevel=2,
             )
         return {
             guid: name
