@@ -1,5 +1,9 @@
 # Unreleased
 
+* Keep a completed refresh successful, and keep a failed refresh's original
+  error, when a recovery warning filter or handler raises. Recovery locations
+  of a failed refresh are attached to its error as notes.
+
 * Publish refreshed metadata and clear invalid audio references even when the
   retained-audio size warning raises.
 
