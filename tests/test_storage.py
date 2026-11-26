@@ -278,6 +278,43 @@ def test_failure_preserves_target_and_closes_descriptor(
         pytest.fail("temporary descriptor leaked")
 
 
+def test_unidentified_stage_is_left_in_place_when_fstat_fails(tmp_path, monkeypatch):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    opened = []
+    original_open = storage.os.open
+    original_fstat = storage.os.fstat
+
+    def open_file(*args, **kwargs):
+        descriptor = original_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def fstat(fd):
+        if opened and fd == opened[0]:
+            raise OSError(errno.EIO, "synthetic fstat")
+        return original_fstat(fd)
+
+    monkeypatch.setattr(storage.os, "open", open_file)
+    monkeypatch.setattr(storage.os, "fstat", fstat)
+    with pytest.raises(OSError, match="synthetic fstat"):
+        with storage.replacement_file(target, binary=True):
+            pytest.fail("fstat failure should happen before yielding")
+    monkeypatch.undo()
+
+    assert target.read_bytes() == b"original"
+    (stage,) = tmp_path.glob(".*.tmp")
+    assert stage.read_bytes() == b""
+    assert len(opened) == 1
+    try:
+        os.fstat(opened[0])
+    except OSError as error:
+        assert error.errno == errno.EBADF
+    else:
+        os.close(opened[0])
+        pytest.fail("temporary descriptor leaked")
+
+
 def test_exclusive_open_failure_does_not_remove_existing_temp(tmp_path, monkeypatch):
     target = tmp_path / "saved"
     target.write_bytes(b"original")

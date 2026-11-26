@@ -528,9 +528,10 @@ completion. Immediately before replacement, the helper checks the temporary
 entry against the file it opened, without following symlinks. If the entry is
 missing or refers to another file, the destination stays as it was. On failure,
 cleanup removes the temporary entry only if it still names the opened file.
-If cleanup cannot inspect the entry, it leaves it in place and reports the
-original failure. The helper captures the empty file's umask-filtered creation
-mode and restricts it to 0600 before writing any payload. After writing and
+If cleanup cannot inspect the entry, or the opened file could not be
+identified, it leaves the entry in place and reports the original failure.
+The helper captures the empty file's umask-filtered creation mode and restricts
+it to 0600 before writing any payload. After writing and
 flushing, the destination's existing mode (or the captured new-file mode) is
 restored for publication. The helper never changes the process umask. The
 containing directory is then synced before success. Failures before replacement
