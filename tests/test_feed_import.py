@@ -196,12 +196,20 @@ def test_untyped_audio_fallback(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "media_type", ["application/octet-stream", "binary/octet-stream"]
+    ("media_type", "suffix", "rejected_paths"),
+    [
+        ("application/octet-stream", "mp3", ("file.bin?name=a.mp3",)),
+        ("binary/octet-stream", "mp3", ("file.bin?name=a.mp3",)),
+        ("application/ogg", "oga", ("video.ogv", "download?name=a.oga", "audio.mp3")),
+        ("Application/Ogg; param=value", "ogg", ("video.ogx",)),
+    ],
 )
-def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_type):
+def test_suffix_based_enclosures_import_and_download(
+    monkeypatch, tmp_path, media_type, suffix, rejected_paths
+):
     monkeypatch.setattr(pdcst.settings, "root", tmp_path)
     feed_url = "https://example.com/feed"
-    audio_url = "https://example.com/A.MP3?download=1"
+    audio_url = f"https://example.com/A.{suffix.upper()}?download=1"
     generic = f'<enclosure url="{audio_url}" type="{media_type}"/>'
     typed_url = "https://example.com/preferred"
     generic_guid = "https://example.com/generic"
@@ -211,9 +219,12 @@ def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_typ
             generic + f'<enclosure url="{typed_url}" type="audio/ogg"/>',
             guid="preferred",
         )
-        + item(
-            f'<enclosure url="https://example.com/file.bin?name=a.mp3" type="{media_type}"/>',
-            guid="non-audio",
+        + "".join(
+            item(
+                f'<enclosure url="https://example.com/{path}" type="{media_type}"/>',
+                guid=f"non-audio-{index}",
+            )
+            for index, path in enumerate(rejected_paths)
         )
         + item(
             '<enclosure url="https://example.com/image.mp3" type="image/jpeg"/>',
@@ -247,7 +258,9 @@ def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_typ
         lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
     )
 
-    with pytest.warns(UserWarning, match="Skipped 3 unusable feed entry"):
+    with pytest.warns(
+        UserWarning, match=f"Skipped {len(rejected_paths) + 2} unusable feed entry"
+    ):
         podcast = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
     directory = tmp_path / podcast.directory
     repository = EpisodeRepository(directory)
@@ -264,8 +277,9 @@ def test_generic_enclosures_import_and_download(monkeypatch, tmp_path, media_typ
     )
 
     pdcst.download("Podcast", guid=generic_guid)
-    assert repository.list()[0].audio_file == "1.mp3"
-    assert (directory / "1.mp3").read_bytes() == b"synthetic audio"
+    filename = f"1.{suffix}"
+    assert repository.list()[0].audio_file == filename
+    assert (directory / filename).read_bytes() == b"synthetic audio"
 
 
 @pytest.mark.parametrize(

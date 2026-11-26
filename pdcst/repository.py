@@ -2046,9 +2046,13 @@ class FeedParserRepository:
             media_type = enclosure.get("type", "").split(";", 1)[0].strip().lower()
             if media_type in cls.AUDIO_TYPES:
                 return href, media_type
-            if media_type and media_type not in GENERIC_BINARY_MEDIA_TYPES:
+            if media_type == "application/ogg":
+                suffixes = {"ogg", "oga"}
+            elif not media_type or media_type in GENERIC_BINARY_MEDIA_TYPES:
+                suffixes = cls.AUDIO_SUFFIXES
+            else:
                 continue
-            if url.path.lower().rsplit(".", 1)[-1] in cls.AUDIO_SUFFIXES:
+            if url.path.lower().rsplit(".", 1)[-1] in suffixes:
                 fallback = fallback or (href, None)
         if fallback:
             return fallback

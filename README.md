@@ -63,11 +63,12 @@ if available, selecting the first valid timestamp in this order: channel update
 Import chooses the first valid HTTP(S) enclosure whose declared media type is
 supported: audio/mpeg, audio/mp3, audio/mp4, audio/aac, audio/x-m4a, audio/ogg,
 audio/opus, audio/wav, audio/x-wav, audio/flac, or audio/x-flac. If none matches,
-import uses the first enclosure with no media type, `application/octet-stream`
-or `binary/octet-stream` whose URL path ends in .mp3, .m4a, .aac, .ogg, .oga,
-.opus, .wav, or .flac (case insensitive, ignoring query strings). Other explicit
-types are rejected even with an audio extension. Enclosure URLs containing
-whitespace are rejected.
+import uses the first suffix-qualified enclosure. Enclosures with no media type,
+`application/octet-stream` or `binary/octet-stream` qualify when the URL path
+ends in .mp3, .m4a, .aac, .ogg, .oga, .opus, .wav, or .flac. Enclosures declared
+as `application/ogg` qualify only with .ogg or .oga. Suffix matching ignores case
+and query strings. Other explicit types are rejected even with an audio
+extension. Enclosure URLs containing whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available. On first import they receive chronological indices
