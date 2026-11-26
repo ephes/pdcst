@@ -1,5 +1,8 @@
 # Unreleased
 
+* Refuse to publish an exchanged staging file during audio or metadata
+  replacement, preserving the previous destination.
+
 * Preserve usable feed episodes during refresh and preview when Python promotes
   the skipped-entry warning to an error.
 

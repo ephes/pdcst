@@ -130,6 +130,40 @@ def test_replacement_publishes_after_close(tmp_path, monkeypatch, binary, existi
     assert set(tmp_path.iterdir()) == {target, sentinel}
 
 
+@pytest.mark.parametrize("relative", [False, True])
+@pytest.mark.parametrize("replacement", ["file", "symlink"])
+def test_replacement_refuses_exchanged_stage(tmp_path, relative, replacement):
+    target = tmp_path / "saved"
+    target.write_bytes(b"original")
+    moved = tmp_path / "completed-stage"
+
+    def exchange_stage():
+        (stage,) = tmp_path.glob(".*.tmp")
+        stage.rename(moved)
+        if replacement == "symlink":
+            stage.symlink_to(moved.name)
+        else:
+            stage.write_bytes(b"unrelated")
+
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY) if relative else None
+    destination = tmp_path / "unused" / target.name if relative else target
+    try:
+        with pytest.raises(OSError, match="Replacement staging file identity changed"):
+            with storage.replacement_file(
+                destination,
+                binary=True,
+                directory_fd=directory_fd,
+                before_replace=exchange_stage,
+            ) as output:
+                output.write(b"new audio")
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+    assert target.read_bytes() == b"original"
+    assert moved.read_bytes() == b"new audio"
+
+
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize(
     "failure",

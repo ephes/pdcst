@@ -42,6 +42,11 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
     def local(path):
         return path.name if directory_fd is not None else path
 
+    def named_info(path):
+        if directory_fd is None:
+            return path.lstat()
+        return os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+
     descriptor = os.open(
         local(temporary),
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -53,7 +58,8 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
         try:
             # Capture umask-filtered new-file permissions while the file is empty;
             # never expose payload through the staging name while writing it.
-            creation_mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+            stage_info = os.fstat(descriptor)
+            creation_mode = stat.S_IMODE(stage_info.st_mode)
             os.fchmod(descriptor, 0o600)
             with os.fdopen(
                 descriptor,
@@ -64,13 +70,7 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
                 yield output
                 output.flush()
                 try:
-                    info = (
-                        target.lstat()
-                        if directory_fd is None
-                        else os.stat(
-                            target.name, dir_fd=directory_fd, follow_symlinks=False
-                        )
-                    )
+                    info = named_info(target)
                 except FileNotFoundError:
                     mode = creation_mode
                 else:
@@ -91,6 +91,9 @@ def replacement_file(target, *, binary=False, directory_fd=None, before_replace=
             os.close(descriptor)
         if before_replace is not None:
             before_replace()
+        named = named_info(temporary)
+        if (named.st_dev, named.st_ino) != (stage_info.st_dev, stage_info.st_ino):
+            raise OSError("Replacement staging file identity changed")
         if directory_fd is None:
             os.replace(temporary, target)
         else:

@@ -523,10 +523,12 @@ response checks verify transfer completeness without validating the audio codec.
 encoding other than identity are rejected. Replacements preserve the permissions
 of existing regular files and refuse symlinks and other nonregular destinations
 before publication. New files use 0666 filtered by the process umask.
-Files are flushed into a sibling temporary file
-and atomically replaced after completion. While empty, the sibling's
-umask-filtered creation mode is captured; before its first payload write it is
-restricted to 0600. After writing and flushing, the destination's existing mode
+Files are flushed into a sibling temporary file and atomically replaced after
+completion. Immediately before replacement, the helper checks the temporary
+entry against the file it opened, without following symlinks. If the entry is
+missing or refers to another file, the destination stays as it was. The helper
+captures the empty file's umask-filtered creation mode and restricts it to 0600
+before writing any payload. After writing and flushing, the destination's existing mode
 (or the captured new-file mode) is restored for publication. The helper never
 changes the process umask. The containing directory is then synced
 before success. Failures before replacement retain the previous file and do not
