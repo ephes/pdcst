@@ -1,5 +1,8 @@
 # Unreleased
 
+* Reject short writes to audio staging files and preserve previous audio and
+  metadata.
+
 * Preserve exchanged or unidentifiable staging files during failed audio or
   metadata replacements, keeping the original failure.
 

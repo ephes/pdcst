@@ -240,7 +240,8 @@ def _download_with_progress(url, target_path, *, directory_fd=None):
                                 raise DownloadError(
                                     "Audio download byte limit exceeded"
                                 )
-                            output.write(chunk)
+                            if output.write(chunk) != len(chunk):
+                                raise DownloadError("Incomplete audio stage write")
                             completed += len(chunk)
                             now = monotonic()
                             if now >= next_update:
