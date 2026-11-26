@@ -1,5 +1,8 @@
 # Unreleased
 
+* Report a saved subscription on stderr when `add` cannot write or flush its
+  confirmation.
+
 * After retiring all refresh intents, attempt each backup removal independently
   and report only paths whose removal failed.
 
