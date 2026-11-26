@@ -70,9 +70,10 @@ audio/opus, audio/wav, audio/x-wav, audio/flac, or audio/x-flac. If none matches
 import uses the first suffix-qualified enclosure. Enclosures with no media type,
 `application/octet-stream` or `binary/octet-stream` qualify when the URL path
 ends in .mp3, .m4a, .aac, .ogg, .oga, .opus, .wav, or .flac. Enclosures declared
-as `application/ogg` qualify only with .ogg or .oga. Suffix matching ignores case
-and query strings. Other explicit types are rejected even with an audio
-extension. Enclosure URLs containing whitespace are rejected.
+as `application/ogg` qualify only with .ogg or .oga, and `application/mp4`
+qualifies only with .m4a. Suffix matching ignores case and query strings. Other
+explicit types are rejected even with an audio extension. Enclosure URLs
+containing whitespace are rejected.
 Entries that fail episode model validation are skipped along with other unusable
 entries. The warning reports how many entries were skipped. Valid sibling
 episodes remain available in refreshes and previews even when Python treats

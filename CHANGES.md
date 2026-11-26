@@ -1,5 +1,8 @@
 # Unreleased
 
+* Import `application/mp4` enclosures with .m4a paths as an audio fallback,
+  keeping explicitly typed audio preferred.
+
 * Keep the existing download association and filename when a feed refresh
   changes only the enclosure's Ogg suffix between .oga and .ogg.
 

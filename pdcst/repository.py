@@ -2070,6 +2070,8 @@ class FeedParserRepository:
                 return href, media_type
             if media_type == "application/ogg":
                 suffixes = {"ogg", "oga"}
+            elif media_type == "application/mp4":
+                suffixes = {"m4a"}
             elif not media_type or media_type in GENERIC_BINARY_MEDIA_TYPES:
                 suffixes = cls.AUDIO_SUFFIXES
             else:
