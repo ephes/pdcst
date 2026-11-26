@@ -1,5 +1,8 @@
 # Unreleased
 
+* Keep the existing download association and filename when a feed refresh
+  changes only the enclosure's Ogg suffix between .oga and .ogg.
+
 * Report a saved subscription on stderr when `add` cannot write or flush its
   confirmation.
 

@@ -63,10 +63,30 @@ from .storage import (
 STORE_MAX_BYTES = 16 * 1024**2
 AUDIO_DESTINATION_SCAN_MAX_ENTRIES = 10_000
 AUDIO_DESTINATION_SCAN_MAX_SECONDS = 1.0
+_OGG_ENCLOSURE_URL = re.compile(
+    r"(https?://[^/?#\s]+/[^?#\s]*)\.(oga|ogg)([?#]\S*)?", re.IGNORECASE
+)
 
 
 def _audio_size_admitted(info):
     return 0 < info.st_size <= settings.audio_max_bytes
+
+
+def _same_enclosure_for_retention(previous_url, current_url):
+    """Treat an Ogg suffix swap as the same enclosure for existing downloads."""
+    if previous_url == current_url:
+        return True
+    previous = _OGG_ENCLOSURE_URL.fullmatch(previous_url)
+    current = _OGG_ENCLOSURE_URL.fullmatch(current_url)
+    if previous is None or current is None:
+        return False
+    previous_stem, previous_suffix, previous_tail = previous.groups()
+    current_stem, current_suffix, current_tail = current.groups()
+    return (
+        previous_stem == current_stem
+        and previous_suffix.lower() != current_suffix.lower()
+        and previous_tail == current_tail
+    )
 
 
 @dataclass
@@ -1337,7 +1357,7 @@ class EpisodeRepository(JsonRepository):
             if (
                 previous
                 and previous.audio_file
-                and previous.audio_url == model.audio_url
+                and _same_enclosure_for_retention(previous.audio_url, model.audio_url)
                 and not audio_format_changed(
                     effective_audio_format(
                         previous.audio_url, previous.audio_media_type

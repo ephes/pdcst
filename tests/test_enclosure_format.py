@@ -62,6 +62,49 @@ def test_legacy_record_without_media_type(tmp_path, episode):
 
 
 @pytest.mark.parametrize(
+    "new_path,retains_audio",
+    [
+        ("file.OGG?token=x", True),
+        ("file.ogg?token=y", False),
+        ("other.ogg?token=x", False),
+    ],
+)
+def test_refresh_ogg_suffix_change_preserves_download(
+    tmp_path, monkeypatch, new_path, retains_audio
+):
+    monkeypatch.setattr(pdcst.settings, "root", tmp_path)
+    feed_url = "https://example.test/feed"
+    url = "https://example.test/file.oga?token=x"
+
+    def fetch(*_):
+        return feedparser.parse(
+            "<rss><channel><title>Synthetic</title>"
+            + item(f'<enclosure url="{url}" type="audio/ogg"/>')
+            + "</channel></rss>"
+        )
+
+    def transfer(enclosure, stage, **kwargs):
+        assert enclosure == url
+        stage.write_bytes(b"original audio")
+
+    monkeypatch.setattr(FeedParserRepository, "fetch_document", fetch)
+    monkeypatch.setattr(pdcst, "download_with_progress", transfer)
+    show = pdcst.subscribe(feed_url, "{index}.{file_format}", None)
+    repo = EpisodeRepository(tmp_path / show.directory)
+    pdcst.download("synthetic", "episode")
+    assert repo.list()[0].audio_file == "1.oga"
+
+    url = f"https://example.test/{new_path}"
+    pdcst.subscribe(feed_url, "{index}.{file_format}", None)
+
+    current = repo.list({"podcast": show})[0]
+    assert current.audio_url == url
+    assert current.audio_file_name == "1.ogg"
+    assert current.audio_file == ("1.oga" if retains_audio else None)
+    assert (repo.base_dir / "1.oga").read_bytes() == b"original audio"
+
+
+@pytest.mark.parametrize(
     "path,previous_type,new_type,old_suffix,new_suffix",
     [
         ("download", "audio/mpeg", "audio/mp4", "mp3", "m4a"),

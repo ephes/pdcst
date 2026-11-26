@@ -97,9 +97,10 @@ WAV/x-wav → `wav`, FLAC/x-flac → `flac` (all types have the `audio/` prefix)
 Thus an `audio/mpeg` enclosure at `/download` becomes an `.mp3` file. Old records
 without the field remain readable and retain their former filename fallback.
 Refreshing the feed populates the field when the enclosure declares a supported
-type. A recognized URL suffix takes precedence when comparing formats. MIME
-aliases for the same format and legacy records with an unknown format can retain
-their download associations.
+type. A recognized URL suffix takes precedence when comparing formats. The
+`.oga` and `.ogg` suffixes identify the same Ogg format and each is used as
+written (in lowercase) for generated filenames. MIME aliases for the same format
+and legacy records with an unknown format can retain their download associations.
 
 Feed and episode timestamps are timezone-aware UTC and serialize with `+00:00`.
 Existing stored timestamps without a timezone are read as UTC, the legacy
@@ -130,7 +131,8 @@ following symlinks. It clears associations to missing or nonregular files,
 repository/recovery names, and files with ambiguous ownership, including
 case/Unicode-equivalent names and aliases to the same file. Episodes in the
 current feed also lose their association if the enclosure URL changed or its
-effective format changed between two known formats.
+effective format changed between two known formats. A URL change limited to
+swapping `.oga` and `.ogg` retains the association and its stored filename.
 Historical episodes keep their feed metadata and usable audio references.
 Refresh also clears references to empty files and files over
 `PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
