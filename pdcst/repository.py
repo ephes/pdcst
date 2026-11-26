@@ -1311,11 +1311,9 @@ class EpisodeRepository(JsonRepository):
             else:
                 refused_size += 1
         if refused_size:
-            warnings.warn(
+            _warn_completed_operation(
                 f"Ignoring {refused_size} retained audio references to empty files "
                 "or files over the audio byte limit",
-                RuntimeWarning,
-                stacklevel=2,
             )
         return {
             guid: name
@@ -1895,12 +1893,19 @@ class FeedParserRepository:
         # Use the same charset detection/repair as the later feed parse, without
         # constructing entries. Neutralise only the tolerated entity spellings.
         converted = feedparser.encodings.convert_to_utf8(headers, bytes(body), {})
-        if len(converted) > cls.MAX_XML_BYTES:
+        spare_bytes = cls.MAX_XML_BYTES - len(converted)
+        if spare_bytes < 0:
             raise FeedError("Feed XML decoded byte limit exceeded")
-        text = _UNESCAPED_AMPERSAND.sub("&amp;", converted.decode("utf-8"))
-        normalized = text.encode("utf-8")
-        if len(normalized) > cls.MAX_XML_BYTES:
-            raise FeedError("Feed XML repaired byte limit exceeded")
+        text = converted.decode("utf-8")
+        # Replacing an ASCII ampersand with "&amp;" adds four UTF-8 bytes.
+        max_repairs = spare_bytes // 4
+        for count, _ in enumerate(_UNESCAPED_AMPERSAND.finditer(text), 1):
+            if count > max_repairs:
+                raise FeedError("Feed XML repaired byte limit exceeded")
+            if count % 256 == 0:
+                remaining()
+        remaining()
+        normalized = _UNESCAPED_AMPERSAND.sub("&amp;", text).encode("utf-8")
         parser = expat.ParserCreate(namespace_separator=" ")
         depth = nodes = entries = links = attributes = 0
 

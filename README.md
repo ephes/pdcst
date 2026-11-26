@@ -137,7 +137,8 @@ swapping `.oga` and `.ogg` retains the association and its stored filename.
 Historical episodes keep their feed metadata and usable audio references.
 Refresh also clears references to empty files and files over
 `PDCST_AUDIO_MAX_BYTES`, with a warning reporting the number of refused
-references. Files exactly at the limit remain eligible.
+references. The refresh still publishes if a warning filter or handler raises.
+Files exactly at the limit remain eligible.
 A permission or I/O error while checking a retained file aborts the refresh
 before either metadata store changes; a stored name that cannot exist (too long
 or an invalid byte sequence for the filesystem) counts as missing. Refresh leaves all physical audio entries
@@ -173,8 +174,10 @@ Failed HTTP response bodies are not read for diagnostics.
 Before feedparser materializes entries, a streaming XML preflight admits at most
 64 levels of nesting, 100,000 elements, 10,000 RSS items/Atom entries, 50,000
 link/enclosure elements and 200,000 attributes/namespace declarations in total.
-Charset decoding and entity repair each have a 16 MiB UTF-8 ceiling. DOCTYPE declarations (including
-external DTDs) are refused before expansion or external access. The acquisition
+Charset decoding and entity repair each have a 16 MiB UTF-8 ceiling.
+Preflight counts ampersand repairs against the remaining byte budget and checks
+the acquisition deadline before building the repaired XML. DOCTYPE declarations
+(including external DTDs) are refused before expansion or external access. The acquisition
 deadline is also checked during preflight, after parsing and during enclosure
 traversal; parser calls are synchronous, bounded by these input/work limits.
 These fixed limits refuse the refresh before either metadata store changes.
